@@ -293,6 +293,10 @@ async function publishToWordPress({
 const AGODA_SITE_ID = process.env.AGODA_SITE_ID
 const AGODA_API_KEY = process.env.AGODA_API_KEY
 
+// 🔥 여기 로그 2줄 추가
+console.log("✅ AGODA_SITE_ID_EXISTS =", !!AGODA_SITE_ID)
+console.log("✅ AGODA_API_KEY_EXISTS =", !!AGODA_API_KEY)
+
 if (!AGODA_SITE_ID) throw new Error("Missing env: AGODA_SITE_ID")
 if (!AGODA_API_KEY) throw new Error("Missing env: AGODA_API_KEY")
 
@@ -301,9 +305,13 @@ const res = await fetch(AGODA_URL, {
   headers: {
     "Content-Type": "application/json",
 
-    // ✅ Agoda 인증 헤더
+    // 🔥 헤더를 모두 넣어서 확실히 전달
     "x-api-key": AGODA_API_KEY,
-    "x-site-id": AGODA_SITE_ID
+    "x-site-id": AGODA_SITE_ID,
+    "X-API-Key": AGODA_API_KEY,
+    "SiteId": AGODA_SITE_ID,
+    "ApiKey": AGODA_API_KEY,
+    "Authorization": AGODA_API_KEY
   },
   body: JSON.stringify(payload)
 })
