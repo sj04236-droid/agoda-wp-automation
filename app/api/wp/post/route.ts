@@ -5,7 +5,7 @@ type Version = "V1" | "V2" | "V3" | "V4"
 
 export async function POST(req: NextRequest) {
   try {
-    // 0) API 인증 (너의 서버 보호용)
+    // 0) 너의 서버 보호용 x-api-key
     const apiKey = req.headers.get("x-api-key")
     if (!apiKey || apiKey !== process.env.API_KEY) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -30,14 +30,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "hotelId is required" }, { status: 400 })
     }
 
-    // 2) Agoda hotelId 기반 상세 조회
+    // 2) Agoda hotelId 기반 조회
     const rawHotel = await agodaGetHotelById(hotelId)
     const hotel = normalizeHotel(rawHotel)
 
     // 3) 제휴 링크 생성
     const affiliateUrl = generateAffiliateUrl(hotelId)
 
-    // 4) 글 HTML 생성
+    // 4) HTML 생성
     const title = `${hotel.name} | ${keyword ?? "호텔"} 예약 가이드`
     const contentHtml = generatePostHTML({
       keyword: keyword ?? "호텔",
@@ -56,12 +56,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, wp })
   } catch (err: any) {
-    // Vercel에서 보기 좋게
     return NextResponse.json(
-      {
-        error: err?.message ?? "Unknown error",
-        detail: err?.detail ?? null
-      },
+      { error: err?.message ?? "Unknown error", detail: err?.detail ?? null },
       { status: 502 }
     )
   }
@@ -70,14 +66,13 @@ export async function POST(req: NextRequest) {
 ////////////////////////////////////////////////////////////
 // ✅ Agoda: hotelId 전용 조회 (additional 금지)
 ////////////////////////////////////////////////////////////
-
 async function agodaGetHotelById(hotelId: string) {
   const AGODA_URL = "https://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
 
   const AGODA_SITE_ID = process.env.AGODA_SITE_ID
   const AGODA_API_KEY = process.env.AGODA_API_KEY
 
-  // 🔎 환경변수 존재 여부(서버 로그에서 true/false로 확인)
+  // (안전) 존재 여부만 로그
   console.log("✅ AGODA_SITE_ID_EXISTS =", !!AGODA_SITE_ID)
   console.log("✅ AGODA_API_KEY_EXISTS =", !!AGODA_API_KEY)
 
@@ -92,10 +87,16 @@ async function agodaGetHotelById(hotelId: string) {
     throw e
   }
 
-  // ✅ hotelId 검색일 때는 criteria.hotelId만 보내야 함 (추가필드 절대 금지)
+  // ✅ hotelId 검색일 때는 criteria.hotelId + checkIn/Out 필요(문서 요구)
+  // 초보자용: 오늘 기준 +1일~+2일로 자동 설정(한국시간 기준)
+  const { checkInDate, checkOutDate } = getDefaultDates()
+
   const payload = {
     criteria: {
+      checkInDate,
+      checkOutDate,
       hotelId: [Number(hotelId)]
+      // ❌ additional 절대 넣지 말기 (hotelId 검색 시 400났던 원인)
     }
   }
 
@@ -105,16 +106,9 @@ async function agodaGetHotelById(hotelId: string) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-
-      // ✅ 인증 헤더 (형식이 계정/문서마다 달라서 최대 호환으로 같이 보냄)
-      "x-api-key": AGODA_API_KEY,
-      "x-site-id": AGODA_SITE_ID,
-      "X-API-Key": AGODA_API_KEY,
-      "SiteId": AGODA_SITE_ID,
-      "ApiKey": AGODA_API_KEY,
-
-      // 혹시 Authorization 방식도 요구할 수 있어 같이 유지
-      Authorization: AGODA_API_KEY
+      "Accept-Encoding": "gzip,deflate",
+      // ✅ 핵심: Authorization = "siteId:apiKey" (공백 없이)
+      Authorization: `${AGODA_SITE_ID}:${AGODA_API_KEY}`
     },
     body: JSON.stringify(payload)
   })
@@ -123,15 +117,11 @@ async function agodaGetHotelById(hotelId: string) {
   let json: any = null
   try {
     json = text ? JSON.parse(text) : null
-  } catch {
-    // JSON 파싱 실패해도 text로 에러 확인 가능
-  }
+  } catch {}
 
   if (!res.ok) {
     console.error("❌ AGODA_ERROR_RESPONSE =", text)
-    const e: any = new Error(
-      `Agoda API failed: ${res.status} ${typeof text === "string" ? text : ""}`
-    )
+    const e: any = new Error(`Agoda API failed: ${res.status} ${text}`)
     e.detail = json ?? text
     throw e
   }
@@ -144,6 +134,23 @@ async function agodaGetHotelById(hotelId: string) {
   }
 
   return results[0]
+}
+
+function getDefaultDates() {
+  // 서버는 UTC일 수 있어서, 날짜만 안전하게 만들기(YYYY-MM-DD)
+  const now = new Date()
+  const in1 = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+  const in2 = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000)
+
+  const checkInDate = toYMD(in1)
+  const checkOutDate = toYMD(in2)
+  return { checkInDate, checkOutDate }
+}
+function toYMD(d: Date) {
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0")
+  const day = String(d.getUTCDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
 }
 
 function normalizeHotel(raw: any) {
@@ -164,7 +171,6 @@ function normalizeHotel(raw: any) {
 ////////////////////////////////////////////////////////////
 // ✅ Agoda 제휴 URL 생성
 ////////////////////////////////////////////////////////////
-
 function generateAffiliateUrl(hotelId: string) {
   const siteId = process.env.AGODA_SITE_ID
   if (!siteId) throw new Error("Missing env: AGODA_SITE_ID")
@@ -174,9 +180,8 @@ function generateAffiliateUrl(hotelId: string) {
 }
 
 ////////////////////////////////////////////////////////////
-// ✅ HTML 생성 (이미지 + CTA + FAQ 스키마)
+// ✅ HTML 생성
 ////////////////////////////////////////////////////////////
-
 function generatePostHTML({
   keyword,
   hotel,
@@ -202,8 +207,7 @@ function generatePostHTML({
        style="background:#ff5a5f;color:#fff;padding:14px 22px;border-radius:10px;text-decoration:none;font-weight:bold;display:inline-block;">
        👉 아고다 최저가 확인하기
     </a>
-  </div>
-  `
+  </div>`
 
   const faqSchema = `
 <script type="application/ld+json">
@@ -223,8 +227,7 @@ function generatePostHTML({
     }
   ]
 }
-</script>
-  `.trim()
+</script>`.trim()
 
   const intro = `
   <h2>${escapeHtml(keyword)} 추천 호텔: ${escapeHtml(hotel.name)}</h2>
@@ -232,57 +235,23 @@ function generatePostHTML({
   <ul>
     ${hotel.address ? `<li><b>주소</b>: ${escapeHtml(hotel.address)}</li>` : ""}
     ${hotel.reviewScore ? `<li><b>평점</b>: ${escapeHtml(String(hotel.reviewScore))}</li>` : ""}
-  </ul>
-  `
+  </ul>`
 
-  let body = ""
-  switch (version) {
-    case "V2":
-      body = `
-      <h3>장점 요약</h3>
-      <ul>
-        <li>위치/접근성, 후기 포인트를 중심으로 비교하세요.</li>
-        <li>성수기엔 가격 변동이 크니 자주 확인하는 게 좋아요.</li>
-      </ul>
-      `
-      break
-    case "V3":
-      body = `
-      <h3>${escapeHtml(keyword)} 일정 체크리스트</h3>
-      <ol>
-        <li>체크인/체크아웃 시간</li>
-        <li>취소/환불 조건</li>
-        <li>교통/주변 편의시설</li>
-      </ol>
-      `
-      break
-    case "V4":
-      body = `
-      <h3>요약</h3>
-      <p><b>${escapeHtml(hotel.name)}</b> 예약은 아래 버튼에서 바로 확인할 수 있어요.</p>
-      <p>FAQ 스키마가 자동 삽입되어 검색엔진에도 도움이 됩니다.</p>
-      `
-      break
-    default:
-      body = `
-      <h3>한 줄 결론</h3>
-      <p>${escapeHtml(hotel.name)}은(는) ${escapeHtml(keyword)} 조건에서 후보로 볼 만합니다.</p>
-      `
-  }
+  const body =
+    version === "V2"
+      ? `<h3>예약 팁</h3><p>주말/성수기에는 가격 변동이 크니 자주 확인하세요.</p>`
+      : version === "V3"
+      ? `<h3>체크리스트</h3><ol><li>취소/환불</li><li>교통</li><li>후기</li></ol>`
+      : version === "V4"
+      ? `<h3>요약</h3><p>아래 버튼에서 바로 가격 확인 가능해요.</p>`
+      : `<h3>한 줄 결론</h3><p>${escapeHtml(hotel.name)}은(는) 후보로 볼 만합니다.</p>`
 
-  return `
-  ${imageHtml}
-  ${intro}
-  ${body}
-  ${ctaHtml}
-  ${faqSchema}
-  `
+  return `${imageHtml}${intro}${body}${ctaHtml}${faqSchema}`
 }
 
 ////////////////////////////////////////////////////////////
 // ✅ WordPress 발행
 ////////////////////////////////////////////////////////////
-
 async function publishToWordPress({
   title,
   content,
@@ -339,7 +308,6 @@ async function publishToWordPress({
 ////////////////////////////////////////////////////////////
 // ✅ 유틸
 ////////////////////////////////////////////////////////////
-
 function escapeHtml(s: string) {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -348,11 +316,9 @@ function escapeHtml(s: string) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;")
 }
-
 function escapeHtmlAttr(s: string) {
   return escapeHtml(s)
 }
-
 function escapeJsonString(s: string) {
   return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, " ")
 }
