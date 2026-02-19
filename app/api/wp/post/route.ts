@@ -69,14 +69,12 @@ export async function POST(req: NextRequest) {
 async function agodaGetHotelById(hotelId: string) {
   const AGODA_URL = "https://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
 
-  const AGODA_SITE_ID = process.env.AGODA_SITE_ID
-  const AGODA_API_KEY = process.env.AGODA_API_KEY
+const AGODA_AUTH = process.env.AGODA_AUTH
 
-  console.log("✅ AGODA_SITE_ID_EXISTS =", !!AGODA_SITE_ID)
-  console.log("✅ AGODA_API_KEY_EXISTS =", !!AGODA_API_KEY)
+console.log("✅ AGODA_AUTH_EXISTS =", !!AGODA_AUTH)
 
-  if (!AGODA_SITE_ID) throw new Error("Missing env: AGODA_SITE_ID")
-  if (!AGODA_API_KEY) throw new Error("Missing env: AGODA_API_KEY")
+if (!AGODA_AUTH) throw new Error("Missing env: AGODA_AUTH")
+
 
   const { checkInDate, checkOutDate } = getDefaultDates()
 
@@ -93,12 +91,12 @@ async function agodaGetHotelById(hotelId: string) {
 
   const res = await fetch(AGODA_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept-Encoding": "gzip,deflate",
-      // ✅ 핵심: siteId:apiKey
-      Authorization: `${AGODA_SITE_ID}:${AGODA_API_KEY}`
-    },
+ headers: {
+  "Content-Type": "application/json",
+  "Accept-Encoding": "gzip,deflate",
+  Authorization: AGODA_AUTH
+},
+
     body: JSON.stringify(payload)
   })
 
