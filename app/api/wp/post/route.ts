@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server"
 
 type PublishType = "draft" | "publish" | "future"
+type Version = "V1" | "V2" | "V3" | "V4"
 
 export async function POST(req: NextRequest) {
   try {
-    // 0) x-api-key 인증
+    // 0) API 인증 (너의 서버 보호용)
     const apiKey = req.headers.get("x-api-key")
     if (!apiKey || apiKey !== process.env.API_KEY) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // 1) 요청 바디 받기
+    // 1) 입력값
     const {
       keyword,
       hotelId,
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest) {
     }: {
       keyword?: string
       hotelId?: string
-      version?: "V1" | "V2" | "V3" | "V4"
+      version?: Version
       publishType?: PublishType
       category?: number
     } = await req.json()
@@ -29,65 +30,90 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "hotelId is required" }, { status: 400 })
     }
 
-    // 2) Agoda 호출 (hotelId 전용: criteria.hotelId만 보냄)
-    const hotel = await agodaGetHotelById(hotelId)
+    // 2) Agoda hotelId 기반 상세 조회
+    const rawHotel = await agodaGetHotelById(hotelId)
+    const hotel = normalizeHotel(rawHotel)
 
     // 3) 제휴 링크 생성
     const affiliateUrl = generateAffiliateUrl(hotelId)
 
-    // 4) HTML 생성 (이미지 + CTA + FAQ 스키마 포함)
+    // 4) 글 HTML 생성
     const title = `${hotel.name} | ${keyword ?? "호텔"} 예약 가이드`
-    const html = generatePostHTML({
+    const contentHtml = generatePostHTML({
       keyword: keyword ?? "호텔",
       hotel,
       affiliateUrl,
       version
     })
 
-    // 5) 워드프레스 발행
+    // 5) WP 발행
     const wp = await publishToWordPress({
       title,
-      content: html,
-      publishType: publishType ?? "draft",
-      category: Number(category ?? 1)
+      content: contentHtml,
+      publishType,
+      category: Number(category)
     })
 
     return NextResponse.json({ success: true, wp })
   } catch (err: any) {
-    // Vercel에서 보기 좋게 에러 노출
+    // Vercel에서 보기 좋게
     return NextResponse.json(
-      { error: err?.message ?? "Unknown error", detail: err?.detail ?? null },
+      {
+        error: err?.message ?? "Unknown error",
+        detail: err?.detail ?? null
+      },
       { status: 502 }
     )
   }
 }
 
 ////////////////////////////////////////////////////////////
-// ✅ Agoda: hotelId 전용 조회 (additional/필터 절대 금지)
+// ✅ Agoda: hotelId 전용 조회 (additional 금지)
 ////////////////////////////////////////////////////////////
 
 async function agodaGetHotelById(hotelId: string) {
-  const AGODA_API_KEY = process.env.AGODA_API_KEY
-  if (!AGODA_API_KEY) throw new Error("Missing env: AGODA_API_KEY")
-
-  // ⚠️ 너가 쓰는 엔드포인트 유지 (기존과 동일하게)
   const AGODA_URL = "https://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
 
-  // ✅ hotelId일 때는 criteria.hotelId 외에 아무것도 보내면 안 됨
+  const AGODA_SITE_ID = process.env.AGODA_SITE_ID
+  const AGODA_API_KEY = process.env.AGODA_API_KEY
+
+  // 🔎 환경변수 존재 여부(서버 로그에서 true/false로 확인)
+  console.log("✅ AGODA_SITE_ID_EXISTS =", !!AGODA_SITE_ID)
+  console.log("✅ AGODA_API_KEY_EXISTS =", !!AGODA_API_KEY)
+
+  if (!AGODA_SITE_ID) {
+    const e: any = new Error("Missing env: AGODA_SITE_ID")
+    e.detail = { missing: "AGODA_SITE_ID" }
+    throw e
+  }
+  if (!AGODA_API_KEY) {
+    const e: any = new Error("Missing env: AGODA_API_KEY")
+    e.detail = { missing: "AGODA_API_KEY" }
+    throw e
+  }
+
+  // ✅ hotelId 검색일 때는 criteria.hotelId만 보내야 함 (추가필드 절대 금지)
   const payload = {
     criteria: {
       hotelId: [Number(hotelId)]
     }
   }
 
-  // ✅ 디버그 로그 (Vercel Runtime Logs에서 확인 가능)
   console.log("✅ AGODA_PAYLOAD =", JSON.stringify(payload))
 
   const res = await fetch(AGODA_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      // ⚠️ 너 프로젝트에서 Authorization을 쓰고 있어서 유지
+
+      // ✅ 인증 헤더 (형식이 계정/문서마다 달라서 최대 호환으로 같이 보냄)
+      "x-api-key": AGODA_API_KEY,
+      "x-site-id": AGODA_SITE_ID,
+      "X-API-Key": AGODA_API_KEY,
+      "SiteId": AGODA_SITE_ID,
+      "ApiKey": AGODA_API_KEY,
+
+      // 혹시 Authorization 방식도 요구할 수 있어 같이 유지
       Authorization: AGODA_API_KEY
     },
     body: JSON.stringify(payload)
@@ -98,33 +124,29 @@ async function agodaGetHotelById(hotelId: string) {
   try {
     json = text ? JSON.parse(text) : null
   } catch {
-    // 응답이 JSON이 아니어도 에러 메시지 보여주기 위해 text 유지
+    // JSON 파싱 실패해도 text로 에러 확인 가능
   }
 
   if (!res.ok) {
-    // Agoda에서 준 에러를 그대로 보여주기
-    const detail = json ?? text
-    const e: any = new Error(`Agoda API failed: ${res.status} ${typeof detail === "string" ? detail : JSON.stringify(detail)}`)
-    e.detail = detail
+    console.error("❌ AGODA_ERROR_RESPONSE =", text)
+    const e: any = new Error(
+      `Agoda API failed: ${res.status} ${typeof text === "string" ? text : ""}`
+    )
+    e.detail = json ?? text
     throw e
   }
 
-  // Agoda 응답 구조에 따라 results 배열에서 첫 호텔 추출
   const results = json?.results
   if (!Array.isArray(results) || results.length === 0) {
-    const e: any = new Error("Agoda fetch failed")
+    const e: any = new Error("Agoda fetch failed: no results")
     e.detail = json
     throw e
   }
 
-  // 아래 필드명은 너가 이전에 쓰던 형태에 맞춘 “가드 처리”
-  const first = results[0]
-  const hotel = normalizeHotel(first)
-  return hotel
+  return results[0]
 }
 
 function normalizeHotel(raw: any) {
-  // raw에 어떤 필드가 오든, HTML 생성에 필요한 최소 필드만 보장
   return {
     name: raw?.name ?? raw?.hotelName ?? "Hotel",
     address: raw?.address ?? raw?.hotelAddress ?? "",
@@ -152,7 +174,7 @@ function generateAffiliateUrl(hotelId: string) {
 }
 
 ////////////////////////////////////////////////////////////
-// ✅ HTML 생성 (버전별 본문 + CTA + FAQ 스키마)
+// ✅ HTML 생성 (이미지 + CTA + FAQ 스키마)
 ////////////////////////////////////////////////////////////
 
 function generatePostHTML({
@@ -164,7 +186,7 @@ function generatePostHTML({
   keyword: string
   hotel: { name: string; address: string; description: string; reviewScore: any; imageURL: string }
   affiliateUrl: string
-  version: "V1" | "V2" | "V3" | "V4"
+  version: Version
 }) {
   const imageHtml = hotel.imageURL
     ? `<div style="text-align:center;margin:18px 0;">
@@ -205,7 +227,7 @@ function generatePostHTML({
   `.trim()
 
   const intro = `
-  <h2>${escapeHtml(keyword)} 관련 추천: ${escapeHtml(hotel.name)}</h2>
+  <h2>${escapeHtml(keyword)} 추천 호텔: ${escapeHtml(hotel.name)}</h2>
   <p>${escapeHtml(hotel.description || `${hotel.name}의 예약 정보를 정리했어요.`)}</p>
   <ul>
     ${hotel.address ? `<li><b>주소</b>: ${escapeHtml(hotel.address)}</li>` : ""}
@@ -219,20 +241,18 @@ function generatePostHTML({
       body = `
       <h3>장점 요약</h3>
       <ul>
-        <li>${escapeHtml(hotel.name)}은(는) 위치/접근성이 좋은 편인 경우가 많아요.</li>
-        <li>예약 전에는 객실 사진/후기를 꼭 확인하세요.</li>
+        <li>위치/접근성, 후기 포인트를 중심으로 비교하세요.</li>
+        <li>성수기엔 가격 변동이 크니 자주 확인하는 게 좋아요.</li>
       </ul>
-      <h3>예약 팁</h3>
-      <p>주말/성수기에는 가격 변동이 크니, 가능한 빨리 가격을 확인하는 게 좋아요.</p>
       `
       break
     case "V3":
       body = `
-      <h3>${escapeHtml(keyword)} 일정에 맞춘 체크 포인트</h3>
+      <h3>${escapeHtml(keyword)} 일정 체크리스트</h3>
       <ol>
-        <li>체크인/체크아웃 시간 확인</li>
-        <li>취소/환불 조건 확인</li>
-        <li>교통/주변 편의시설 확인</li>
+        <li>체크인/체크아웃 시간</li>
+        <li>취소/환불 조건</li>
+        <li>교통/주변 편의시설</li>
       </ol>
       `
       break
@@ -240,8 +260,7 @@ function generatePostHTML({
       body = `
       <h3>요약</h3>
       <p><b>${escapeHtml(hotel.name)}</b> 예약은 아래 버튼에서 바로 확인할 수 있어요.</p>
-      <h3>자주 묻는 질문</h3>
-      <p>페이지 하단 FAQ 스키마가 자동 삽입됩니다.</p>
+      <p>FAQ 스키마가 자동 삽입되어 검색엔진에도 도움이 됩니다.</p>
       `
       break
     default:
@@ -261,7 +280,7 @@ function generatePostHTML({
 }
 
 ////////////////////////////////////////////////////////////
-// ✅ 워드프레스 발행
+// ✅ WordPress 발행
 ////////////////////////////////////////////////////////////
 
 async function publishToWordPress({
@@ -290,32 +309,10 @@ async function publishToWordPress({
 
   const res = await fetch(`${WP_URL.replace(/\/$/, "")}/wp-json/wp/v2/posts`, {
     method: "POST",
-const AGODA_SITE_ID = process.env.AGODA_SITE_ID
-const AGODA_API_KEY = process.env.AGODA_API_KEY
-
-// 🔥 여기 로그 2줄 추가
-console.log("✅ AGODA_SITE_ID_EXISTS =", !!AGODA_SITE_ID)
-console.log("✅ AGODA_API_KEY_EXISTS =", !!AGODA_API_KEY)
-
-if (!AGODA_SITE_ID) throw new Error("Missing env: AGODA_SITE_ID")
-if (!AGODA_API_KEY) throw new Error("Missing env: AGODA_API_KEY")
-
-const res = await fetch(AGODA_URL, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-
-    // 🔥 헤더를 모두 넣어서 확실히 전달
-    "x-api-key": AGODA_API_KEY,
-    "x-site-id": AGODA_SITE_ID,
-    "X-API-Key": AGODA_API_KEY,
-    "SiteId": AGODA_SITE_ID,
-    "ApiKey": AGODA_API_KEY,
-    "Authorization": AGODA_API_KEY
-  },
-  body: JSON.stringify(payload)
-})
-
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Basic ${auth}`
+    },
     body: JSON.stringify({
       title,
       content,
@@ -331,9 +328,8 @@ const res = await fetch(AGODA_URL, {
   } catch {}
 
   if (!res.ok) {
-    const detail = json ?? text
     const e: any = new Error(`WordPress publish failed: ${res.status}`)
-    e.detail = detail
+    e.detail = json ?? text
     throw e
   }
 
@@ -341,7 +337,7 @@ const res = await fetch(AGODA_URL, {
 }
 
 ////////////////////////////////////////////////////////////
-// ✅ 작은 유틸
+// ✅ 유틸
 ////////////////////////////////////////////////////////////
 
 function escapeHtml(s: string) {
@@ -358,6 +354,5 @@ function escapeHtmlAttr(s: string) {
 }
 
 function escapeJsonString(s: string) {
-  // JSON 안에 들어갈 문자열용
   return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, " ")
 }
