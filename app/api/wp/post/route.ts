@@ -87,11 +87,21 @@ const outDate = checkOutDate || dates.checkOutDate
   // ✅ additional 절대 금지
 const payload = {
   criteria: {
+    // ✅ 문서 예시 필드들
+    language: "ko-kr",
+    currency: "KRW",
+    occupancy: {
+      numberOfAdult: 2,
+      numberOfChildren: 0
+    },
+
+    // ✅ 호텔ID 검색
     checkInDate: inDate,
     checkOutDate: outDate,
     hotelId: [Number(hotelId)]
   }
 }
+
 
 
   console.log("✅ AGODA_PAYLOAD =", JSON.stringify(payload))
