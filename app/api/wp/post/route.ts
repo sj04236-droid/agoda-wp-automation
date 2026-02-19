@@ -13,25 +13,23 @@ export async function POST(req: NextRequest) {
 
     // 1) 입력값
     const {
-      keyword,
-      hotelId,
-      version = "V1",
-      publishType = "draft",
-      category = 1
-    }: {
-      keyword?: string
-      hotelId?: string
-      version?: Version
-      publishType?: PublishType
-      category?: number
-    } = await req.json()
+  keyword,
+  hotelId,
+  version = "V1",
+  publishType = "draft",
+  category = 1,
+  checkInDate,
+  checkOutDate
+} = await req.json()
+
 
     if (!hotelId) {
       return NextResponse.json({ error: "hotelId is required" }, { status: 400 })
     }
 
     // 2) Agoda 조회
-    const rawHotel = await agodaGetHotelById(hotelId)
+    const rawHotel = await agodaGetHotelById(hotelId, checkInDate, checkOutDate)
+
     const hotel = normalizeHotel(rawHotel)
 
     // 3) 제휴 링크
@@ -66,7 +64,12 @@ export async function POST(req: NextRequest) {
 ////////////////////////////////////////////////////////////
 // Agoda (hotelId 전용)
 ////////////////////////////////////////////////////////////
-async function agodaGetHotelById(hotelId: string) {
+async function agodaGetHotelById(
+  hotelId: string,
+  checkInDate?: string,
+  checkOutDate?: string
+) {
+
   const AGODA_URL = "https://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
 
 const AGODA_AUTH = process.env.AGODA_AUTH
@@ -76,16 +79,20 @@ console.log("✅ AGODA_AUTH_EXISTS =", !!AGODA_AUTH)
 if (!AGODA_AUTH) throw new Error("Missing env: AGODA_AUTH")
 
 
-  const { checkInDate, checkOutDate } = getDefaultDates()
+ const dates = getDefaultDates()
+const inDate = checkInDate || dates.checkInDate
+const outDate = checkOutDate || dates.checkOutDate
+
 
   // ✅ additional 절대 금지
-  const payload = {
-    criteria: {
-      checkInDate,
-      checkOutDate,
-      hotelId: [Number(hotelId)]
-    }
+const payload = {
+  criteria: {
+    checkInDate: inDate,
+    checkOutDate: outDate,
+    hotelId: [Number(hotelId)]
   }
+}
+
 
   console.log("✅ AGODA_PAYLOAD =", JSON.stringify(payload))
 
