@@ -290,10 +290,24 @@ async function publishToWordPress({
 
   const res = await fetch(`${WP_URL.replace(/\/$/, "")}/wp-json/wp/v2/posts`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${auth}`
-    },
+const AGODA_SITE_ID = process.env.AGODA_SITE_ID
+const AGODA_API_KEY = process.env.AGODA_API_KEY
+
+if (!AGODA_SITE_ID) throw new Error("Missing env: AGODA_SITE_ID")
+if (!AGODA_API_KEY) throw new Error("Missing env: AGODA_API_KEY")
+
+const res = await fetch(AGODA_URL, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+
+    // ✅ Agoda 인증 헤더
+    "x-api-key": AGODA_API_KEY,
+    "x-site-id": AGODA_SITE_ID
+  },
+  body: JSON.stringify(payload)
+})
+
     body: JSON.stringify({
       title,
       content,
