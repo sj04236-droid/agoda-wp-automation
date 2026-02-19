@@ -160,6 +160,9 @@ async function agodaGetHotelById(hotelId: string, checkInDate?: string, checkOut
   })
 
   const text = await res.text()
+console.log("✅ Agoda status =", res.status)
+console.log("✅ Agoda raw =", text)
+
   let data: any = null
   try {
     data = JSON.parse(text)
