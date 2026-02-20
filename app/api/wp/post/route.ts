@@ -1,14 +1,10 @@
 import { NextResponse } from "next/server"
 
-export const runtime = "nodejs"
-
 /**
  * ✅ 필수 ENV
- * - API_KEY: 네 Vercel API 보호용(x-api-key)
- * - WP_URL, WP_USERNAME, WP_APP_PASSWORD: WP 발행용
- * - AGODA_AUTH: "siteId:apiKey" 형태 (예: "1959499:8c98....")
- *
- * (선택) - AGODA_CID: 있으면 affiliate 링크에 기본 cid로 사용 (없으면 siteId 사용)
+ * - API_KEY: Vercel API 보호용(x-api-key)
+ * - WP_URL, WP_USERNAME, WP_APP_PASSWORD: WordPress REST API 발행용
+ * - AGODA_AUTH: "cid:apiKey" 형태 (예: "1959499:8c98....")
  */
 
 type PublishType = "draft" | "publish" | "future"
@@ -18,22 +14,9 @@ function jsonError(status: number, message: string, detail?: any) {
   return NextResponse.json({ error: message, detail }, { status })
 }
 
-function base64(s: string) {
-  return Buffer.from(s, "utf8").toString("base64")
-}
-
-function safeStr(v: any) {
-  return typeof v === "string" ? v.trim() : ""
-}
-
-function normalizePublishType(v: any): PublishType {
-  if (v === "publish" || v === "future" || v === "draft") return v
-  return "draft"
-}
-
-function normalizeVersion(v: any): Version {
-  if (v === "V1" || v === "V2" || v === "V3" || v === "V4") return v
-  return "V1"
+function toHttps(url?: string) {
+  if (!url) return undefined
+  return url.replace(/^http:\/\//i, "https://")
 }
 
 function getDefaultDates() {
@@ -54,50 +37,53 @@ function getDefaultDates() {
   return { checkInDate: toYMD(inDate), checkOutDate: toYMD(outDate) }
 }
 
+function normalizePublishType(v: any): PublishType {
+  if (v === "publish" || v === "future" || v === "draft") return v
+  return "draft"
+}
+
+function normalizeVersion(v: any): Version {
+  if (v === "V1" || v === "V2" || v === "V3" || v === "V4") return v
+  return "V1"
+}
+
+function base64(s: string) {
+  return Buffer.from(s, "utf8").toString("base64")
+}
+
 /**
- * ✅ Agoda 인증: AGODA_AUTH = "siteId:apiKey"
+ * ✅ Agoda 인증: AGODA_AUTH = "cid:apiKey"
  */
 function getAgodaAuthFromEnv() {
   const AGODA_AUTH = process.env.AGODA_AUTH
-  if (!AGODA_AUTH) throw new Error("Missing env: AGODA_AUTH (format: siteId:apiKey)")
+  if (!AGODA_AUTH) throw new Error("Missing env: AGODA_AUTH (format: cid:apiKey)")
 
   const parts = AGODA_AUTH.split(":")
-  if (parts.length < 2) throw new Error("Invalid AGODA_AUTH format. Must be siteId:apiKey")
+  if (parts.length < 2) throw new Error("Invalid AGODA_AUTH format. Must be cid:apiKey")
 
-  const siteId = parts[0].trim()
+  const cid = parts[0].trim()
   const apiKey = parts.slice(1).join(":").trim()
-  if (!siteId || !apiKey) throw new Error("Invalid AGODA_AUTH value (empty siteId or apiKey)")
+  if (!cid || !apiKey) throw new Error("Invalid AGODA_AUTH value (empty cid or apiKey)")
 
-  return { siteId, apiKey, authHeader: `${siteId}:${apiKey}` }
+  return { cid, apiKey, authHeader: `${cid}:${apiKey}` }
 }
 
 /**
- * ✅ hotelUrl(예: partnersearch)에서 hid 추출
+ * ✅ hotelUrl(제휴 링크)에서 hid 추출
  */
-function extractHotelIdFromUrl(url: string): string | null {
-  if (!url) return null
-  try {
-    const u = new URL(url)
-    const hid = u.searchParams.get("hid")
-    if (hid && /^\d+$/.test(hid)) return hid
-  } catch {
-    // URL 파싱 실패 시 regex로 한번 더
-  }
-  const m = url.match(/[\?&]hid=(\d{3,12})/i)
-  return m?.[1] ?? null
+function extractHidFromHotelUrl(hotelUrl: string) {
+  const m = hotelUrl.match(/[\?&]hid=(\d{3,12})/i)
+  return m?.[1] || null
 }
 
 /**
- * ✅ (옵션) keyword로 Agoda 웹 검색 페이지를 긁어서 hid(=hotelId) 하나 뽑기
- * - 안정성은 hotelUrl/hid 직접 입력이 더 좋음
+ * ✅ keyword로 Agoda 웹 검색 페이지를 긁어서 hid(=hotelId) 하나 뽑기 (마지막 수단)
  */
 async function resolveHotelIdFromKeyword(keyword: string, cid: string, hl = "ko-kr") {
   const { checkInDate, checkOutDate } = getDefaultDates()
+
   const candidates = [
     `https://www.agoda.com/${hl}/search?cid=${encodeURIComponent(cid)}&textToSearch=${encodeURIComponent(
-      keyword
-    )}&checkIn=${checkInDate}&checkOut=${checkOutDate}&rooms=1&adults=2`,
-    `https://www.agoda.com/${hl}/search?cid=${encodeURIComponent(cid)}&city=${encodeURIComponent(
       keyword
     )}&checkIn=${checkInDate}&checkOut=${checkOutDate}&rooms=1&adults=2`,
     `https://www.agoda.com/${hl}/search?cid=${encodeURIComponent(cid)}&asq=${encodeURIComponent(
@@ -123,9 +109,7 @@ async function resolveHotelIdFromKeyword(keyword: string, cid: string, hl = "ko-
         html.match(/hotelId%22%3A(\d{3,12})/i)
 
       if (hidMatch?.[1]) return hidMatch[1]
-    } catch {
-      // 다음 후보
-    }
+    } catch {}
   }
   return null
 }
@@ -137,9 +121,9 @@ async function agodaGetHotelById(hotelId: string, checkInDate?: string, checkOut
   const AGODA_URL = "https://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
   const { authHeader } = getAgodaAuthFromEnv()
 
-  const defaults = getDefaultDates()
-  const inDate = checkInDate || defaults.checkInDate
-  const outDate = checkOutDate || defaults.checkOutDate
+  const dates = getDefaultDates()
+  const inDate = checkInDate || dates.checkInDate
+  const outDate = checkOutDate || dates.checkOutDate
 
   const payload = {
     criteria: {
@@ -169,19 +153,14 @@ async function agodaGetHotelById(hotelId: string, checkInDate?: string, checkOut
   let data: any = null
   try {
     data = JSON.parse(text)
-  } catch {
-    // noop
-  }
+  } catch {}
 
-  if (!res.ok) {
-    throw new Error(`Agoda API failed: ${res.status} ${text}`)
-  }
-
+  if (!res.ok) throw new Error(`Agoda API failed: ${res.status} ${text}`)
   return data
 }
 
 /**
- * ✅ 날짜 포함 affiliate 링크
+ * ✅ 제휴 링크 생성(날짜 포함)
  */
 function buildAffiliateLink(params: {
   cid: string
@@ -190,98 +169,96 @@ function buildAffiliateLink(params: {
   checkOutDate?: string
   adults?: number
   rooms?: number
+  hl?: string
 }) {
   const { cid, hotelId } = params
+  const hl = params.hl || "ko-kr"
   const adults = params.adults ?? 2
   const rooms = params.rooms ?? 1
 
-  const defaults = getDefaultDates()
-  const checkIn = params.checkInDate || defaults.checkInDate
-  const checkOut = params.checkOutDate || defaults.checkOutDate
+  const q: Record<string, string> = {
+    hid: String(hotelId),
+    cid: String(cid),
+    hl,
+    rooms: String(rooms),
+    adults: String(adults),
+  }
+  if (params.checkInDate) q.checkIn = params.checkInDate
+  if (params.checkOutDate) q.checkOut = params.checkOutDate
 
-  const u = new URL("https://www.agoda.com/partners/partnersearch.aspx")
-  u.searchParams.set("hid", hotelId)
-  u.searchParams.set("cid", cid)
-  u.searchParams.set("checkIn", checkIn)
-  u.searchParams.set("checkOut", checkOut)
-  u.searchParams.set("rooms", String(rooms))
-  u.searchParams.set("adults", String(adults))
-  return u.toString()
+  const qs = Object.entries(q)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&")
+
+  return `https://www.agoda.com/partners/partnersearch.aspx?${qs}`
 }
 
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)]
-}
-
-function clampStr(s: string, max = 155) {
-  const t = (s || "").trim()
-  return t.length <= max ? t : t.slice(0, max - 1).trim()
-}
-
-/**
- * ✅ 영문 슬러그 생성(없으면 hotelId 기반)
- */
-function slugify(input: string) {
-  const s = (input || "")
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "") // 악센트 제거
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-  return s
-}
-
-function buildTitle(keyword: string, hotelName: string, version: Version) {
-  const regionHints = ["여행", "숙소", "예약", "가이드", "추천", "정리"]
-  const tail = pick(regionHints)
-
-  const patterns = [
-    `${hotelName} | ${keyword} 예약 전 꼭 볼 정보`,
-    `${keyword} 숙소로 ${hotelName} 어때? 핵심만 ${tail}`,
-    `${hotelName} 가격·후기·체크포인트 – ${keyword} 기준`,
-    `${keyword} 추천: ${hotelName} 장단점 ${tail}`,
-    `${hotelName} 한눈에 보기 | ${keyword} 이용 팁`,
-  ]
-
-  // version은 "패턴 그룹 선택" 정도로만 사용(너무 고정되면 저품질 느낌)
-  if (version === "V1") return patterns[0]
-  if (version === "V2") return patterns[1]
-  if (version === "V3") return patterns[2]
-  return pick(patterns)
-}
-
-function buildHashtags(params: { keyword: string; hotelName: string; cityName?: string; countryName?: string }) {
-  const { keyword, hotelName, cityName, countryName } = params
-  const base = new Set<string>()
-
-  const kw = keyword.split(/\s+/).filter(Boolean).slice(0, 2)
-  kw.forEach((k) => base.add(`#${k.replace(/[^가-힣a-zA-Z0-9]/g, "")}`))
-
-  if (cityName) base.add(`#${cityName.replace(/\s+/g, "")}호텔`)
-  if (countryName) base.add(`#${countryName.replace(/\s+/g, "")}여행`)
-
-  const hotelTag = hotelName
-    .toLowerCase()
-    .replace(/[^a-z0-9가-힣\s]/g, "")
-    .split(/\s+/)
-    .slice(0, 2)
-    .join("")
-  if (hotelTag) base.add(`#${hotelTag}`)
-
-  const extras = ["#호텔추천", "#숙소추천", "#가족여행", "#커플여행", "#가성비숙소", "#리조트추천"]
-  while (base.size < 5) base.add(pick(extras))
-  return Array.from(base).slice(0, 6).join(" ")
+function buildImageTag(url: string, alt: string) {
+  const safe = toHttps(url)!
+  return `
+<div style="text-align:center;margin:18px 0;">
+  <img src="${safe}" alt="${alt}" style="max-width:100%;border-radius:14px;" />
+</div>`.trim()
 }
 
 /**
- * ✅ 템플릿 D: 기본정보박스 + CTA 3개 + 랜덤 문장 + FAQ 스키마
- * + 2000자 미만이면 자동 확장
+ * ✅ 사용자가 content(완성본 HTML)를 보낸 경우:
+ * - content에 <img>가 없으면 imageUrls로 대표/섹션/갤러리 자동 삽입
  */
+function injectImagesIntoProvidedHtml(params: {
+  html: string
+  hotelName: string
+  keyword: string
+  imageUrls: string[]
+}) {
+  const { html, hotelName, imageUrls } = params
+  if (!html) return html
+  if (imageUrls.length === 0) return html
+  if (/<img\s/i.test(html)) return html
+
+  const top = buildImageTag(imageUrls[0], `${hotelName} 대표 이미지`)
+  const roomImg = imageUrls[1] ? buildImageTag(imageUrls[1], `${hotelName} 객실 이미지`) : ""
+  const poolImg = imageUrls[2] ? buildImageTag(imageUrls[2], `${hotelName} 수영장/해변 이미지`) : ""
+  const foodImg = imageUrls[3] ? buildImageTag(imageUrls[3], `${hotelName} 조식/레스토랑 이미지`) : ""
+
+  let out = `${top}\n\n${html}`
+
+  const insertAfterHeading = (pattern: RegExp, block: string) => {
+    if (!block) return
+    out = out.replace(pattern, (m0) => `${m0}\n${block}\n`)
+  }
+
+  // V3 섹션 번호(2/3/4)로 끼워넣기 시도
+  insertAfterHeading(/<h2[^>]*>\s*2[\s\S]*?<\/h2>/i, roomImg)
+  insertAfterHeading(/<h2[^>]*>\s*3[\s\S]*?<\/h2>/i, poolImg)
+  insertAfterHeading(/<h2[^>]*>\s*4[\s\S]*?<\/h2>/i, foodImg)
+
+  // 남는 이미지는 하단 갤러리
+  const rest = imageUrls.slice(1)
+  if (rest.length >= 2) {
+    const thumbs = rest
+      .slice(0, 4)
+      .map((u, i) => {
+        const alt = `${hotelName} 사진 ${i + 2}`
+        const su = toHttps(u)!
+        return `<img src="${su}" alt="${alt}" style="width:100%;border-radius:10px;display:block;" />`
+      })
+      .join("")
+    const gallery = `
+<h2>📸 사진 더 보기</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0;">
+  ${thumbs}
+</div>`.trim()
+    out = `${out}\n\n${gallery}`
+  }
+
+  return out
+}
+
 function buildHtml(params: {
   hotelName: string
   imageURL?: string
+  imageUrls?: string[]
   reviewScore?: number
   affiliateUrl: string
   keyword: string
@@ -290,198 +267,170 @@ function buildHtml(params: {
   checkInDate?: string
   checkOutDate?: string
 }) {
-  const { hotelName, imageURL, reviewScore, affiliateUrl, keyword, cityName, countryName, checkInDate, checkOutDate } =
-    params
+  const {
+    hotelName,
+    imageURL,
+    imageUrls,
+    reviewScore,
+    affiliateUrl,
+    keyword,
+    cityName,
+    countryName,
+    checkInDate,
+    checkOutDate,
+  } = params
 
-  const scoreText = typeof reviewScore === "number" ? `${reviewScore} / 10` : "예약 페이지에서 확인"
-  const scheduleText =
-    checkInDate && checkOutDate ? `${checkInDate} ~ ${checkOutDate}` : "원하는 날짜로 확인"
+  const safeScore = typeof reviewScore === "number" ? reviewScore : null
 
-  const introVariants = [
-    `${hotelName}을(를) “${keyword}”로 찾는 분들이 가장 많이 궁금해하는 포인트만 모아서 정리했어요.`,
-    `여행 동선을 기준으로 보면 ${hotelName}이(가) 잘 맞는지 빠르게 판단할 수 있게 구성했어요.`,
-    `가격/후기/체크포인트를 중심으로 ${hotelName}을(를) 한 번에 훑어볼 수 있게 정리했어요.`,
-    `시간 아끼려고 핵심만 담았어요. ${hotelName} 예약 전에 아래 체크리스트만 확인해도 충분해요.`,
+  const imgs = (imageUrls || []).filter(Boolean).map((u) => toHttps(u)!).filter(Boolean)
+  if (imgs.length === 0 && imageURL) imgs.push(toHttps(imageURL)!)
+
+  const topImgBlock = imgs[0] ? buildImageTag(imgs[0], `${hotelName} 대표 이미지`) : ""
+  const roomImgBlock = imgs[1] ? buildImageTag(imgs[1], `${hotelName} 객실 이미지`) : ""
+  const poolImgBlock = imgs[2] ? buildImageTag(imgs[2], `${hotelName} 수영장/해변 이미지`) : ""
+  const foodImgBlock = imgs[3] ? buildImageTag(imgs[3], `${hotelName} 조식/레스토랑 이미지`) : ""
+
+  const ctaButton = (label: string) => `
+<div style="margin:18px 0;text-align:center;">
+  <a href="${affiliateUrl}" target="_blank" rel="nofollow noopener"
+     style="background:#ff5a5f;color:#fff;padding:14px 22px;border-radius:12px;text-decoration:none;font-weight:700;display:inline-block;">
+    👉 ${label}
+  </a>
+</div>`.trim()
+
+  const tagsPool = [
+    "#장기 숙박",
+    "#편의시설",
+    "#실속형",
+    "#가족 여행",
+    "#커플 여행",
+    "#리조트/수영장 중심",
+    "#첫 방문",
+    "#가성비 우선",
   ]
+  const pickTags = () => {
+    const shuffled = [...tagsPool].sort(() => Math.random() - 0.5)
+    return shuffled.slice(0, 3).join(" ")
+  }
 
-  const oneLineVariants = [
-    "한 줄로 보면, 일정과 예산만 맞으면 충분히 만족할 가능성이 높아요.",
+  const randomOne = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)]
+  const summaryPool = [
     "동선이 편하면 체감 만족도가 크게 올라가요. 위치/교통부터 먼저 체크해보세요.",
-    "부대시설(수영장/조식/라운지 등)을 중시한다면 후보로 올려둘 만해요.",
     "성수기에는 변동이 크니, 날짜를 1~2일 바꿔 비교하면 유리할 때가 많아요.",
+    "리뷰 흐름이 안정적이면 실패 확률이 낮아요. 평점과 최근 리뷰를 같이 보세요.",
   ]
-
   const checklistPool = [
-    "무료 취소 마감일/환불 규정을 먼저 확인하세요.",
+    "취소 규정(무료 취소 마감일) 체크는 필수예요.",
     "방 타입(전망/침대 구성)과 인원 정책을 확인하세요.",
     "조식 포함/불포함 가격 차이를 비교해보세요.",
     "공항/역 이동 시간과 교통편을 먼저 체크해두면 편해요.",
     "성수기에는 가격 변동이 크니 2~3일 간격으로 비교해보세요.",
     "체크인/체크아웃 시간과 짐 보관 가능 여부를 확인해두면 좋아요.",
-    "리조트형이면 수영장/부대시설 운영시간(시즌)을 확인하세요.",
   ]
-
-  const tagsVariants = [
-    "#가성비 우선 #리조트/수영장 중심 #가족 여행",
-    "#위치 우선 #도보 이동 #첫 방문",
-    "#휴양 중심 #커플 여행 #조용한 숙소",
-    "#장기 숙박 #편의시설 #실속형",
-  ]
-
-  const faqQuestions = [
-    { q: `${hotelName} 조식은 어떤가요?`, a: "조식 구성은 시즌/프로모션에 따라 달라질 수 있어요. 포함 여부와 최근 리뷰를 함께 확인해보세요." },
-    { q: `${hotelName} 수영장/부대시설은 어떤가요?`, a: "부대시설은 숙소 선택의 핵심 포인트예요. 운영시간/휴무는 시즌에 따라 달라질 수 있어 예약 페이지에서 확인해 주세요." },
-    { q: `${hotelName} 체크인/체크아웃 팁이 있나요?`, a: "체크인/체크아웃은 정책에 따라 달라질 수 있어요. 늦은 체크인/레이트 체크아웃 가능 여부를 미리 확인해두면 좋아요." },
-    { q: `${hotelName} 주변에 뭐가 있나요?`, a: "주변 환경은 여행 목적(휴양/관광)에 따라 장단점이 달라요. 지도/이동 시간을 기준으로 판단해보세요." },
-  ]
-
-  const selectedFaq = [pick(faqQuestions), pick(faqQuestions)].filter((v, i, arr) => arr.findIndex(x => x.q === v.q) === i).slice(0, 2)
+  const pickChecklist = () =>
+    [...checklistPool]
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 3)
+      .map((t) => `<li style="margin:6px 0;">${t}</li>`)
+      .join("")
 
   const faqJsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
-    mainEntity: selectedFaq.map((x) => ({
-      "@type": "Question",
-      name: x.q,
-      acceptedAnswer: { "@type": "Answer", text: x.a },
-    })),
+    mainEntity: [
+      {
+        "@type": "Question",
+        name: `${hotelName} 체크인/체크아웃 팁이 있나요?`,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: "체크인/체크아웃은 정책에 따라 달라질 수 있어요. 예약 페이지 기준 시간을 확인해 주세요.",
+        },
+      },
+    ],
   }
 
-  const imgAltVariants = [
-    `${hotelName} 객실 전경`,
-    `${hotelName} 호텔 전경`,
-    `${cityName ? `${cityName} ` : ""}${hotelName} 대표 이미지`,
-    `${hotelName} 숙소 사진`,
-  ]
+  const dateLabel =
+    checkInDate && checkOutDate ? `${checkInDate} ~ ${checkOutDate}` : "원하는 날짜로 확인"
 
-  const imgBlock = imageURL
-    ? `<div style="text-align:center;margin:18px 0;">
-         <img src="${imageURL}" alt="${pick(imgAltVariants)}"
-              style="max-width:100%;border-radius:14px;" />
-       </div>`
-    : ""
+  const locationLabel =
+    cityName || countryName ? `${[cityName, countryName].filter(Boolean).join(", ")}` : "예약 페이지에서 확인"
 
-  const regionLine =
-    cityName || countryName
-      ? `<div style="margin:6px 0 0;color:#6b7280;font-size:13px;">📍 지역: ${[cityName, countryName].filter(Boolean).join(", ")}</div>`
-      : ""
-
-  const hashtags = buildHashtags({ keyword, hotelName, cityName, countryName })
-
-  const cta1 = `👉 아고다 최저가 확인하기`
-  const cta2 = `👉 현재 날짜로 가격/객실 확인`
-  const cta3 = `👉 예약 페이지로 이동`
-
-  const listItems = Array.from({ length: 3 }, () => pick(checklistPool))
-  const uniqueItems = listItems.filter((v, i, arr) => arr.indexOf(v) === i)
-
-  const basicBox = `
-    <div style="border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;background:#f8fafc;margin:18px 0;">
-      <div style="font-weight:800;font-size:16px;margin-bottom:10px;">🏨 호텔 기본 정보</div>
-      ${regionLine}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:14px;line-height:1.5;margin-top:10px;">
-        <div><b>호텔명</b><br/>${hotelName}</div>
-        <div><b>키워드</b><br/>${keyword}</div>
-        <div><b>위치</b><br/>예약 페이지에서 확인</div>
-        <div><b>평점</b><br/>${scoreText}</div>
-        <div><b>추천 일정</b><br/>${scheduleText}</div>
-        <div><b>추천 태그</b><br/>${pick(tagsVariants)}</div>
-      </div>
-      <div style="margin-top:10px;color:#374151;font-size:13px;">
-        ${typeof reviewScore === "number" && reviewScore >= 8.5 ? "평점이 높은 편(8.5점+)이라 안정적인 선택지예요." : "조건(날짜/요금/방 타입)에 따라 체감 만족도가 크게 달라질 수 있어요."}
-      </div>
-    </div>
-  `.trim()
-
-  const btn = (label: string) => `
-    <div style="margin:18px 0;text-align:center;">
-      <a href="${affiliateUrl}" target="_blank" rel="nofollow noopener"
-         style="background:#ff5a5f;color:#fff;padding:14px 22px;border-radius:12px;text-decoration:none;font-weight:700;display:inline-block;">
-        ${label}
-      </a>
-    </div>
-  `.trim()
-
-  let html = `
-${imgBlock}
+  return `
+${topImgBlock}
 
 <h2>${keyword} 추천 호텔: ${hotelName}</h2>
-<p>${pick(introVariants)}</p>
+<p>시간 아끼려고 핵심만 담았어요. ${hotelName} 예약 전에 아래 체크리스트만 확인해도 충분해요.</p>
 
-${btn(cta1)}
+${ctaButton("아고다 최저가 확인하기")}
 
-${basicBox}
+<div style="border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;background:#f8fafc;margin:18px 0;">
+  <div style="font-weight:800;font-size:16px;margin-bottom:10px;">🏨 호텔 기본 정보</div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:14px;line-height:1.5;margin-top:10px;">
+    <div><b>호텔명</b><br/>${hotelName}</div>
+    <div><b>키워드</b><br/>${keyword}</div>
+    <div><b>위치</b><br/>${locationLabel}</div>
+    <div><b>평점</b><br/>${safeScore ? `${safeScore} / 10` : "예약 페이지에서 확인"}</div>
+    <div><b>추천 일정</b><br/>${dateLabel}</div>
+    <div><b>추천 태그</b><br/>${pickTags()}</div>
+  </div>
+
+  <div style="margin-top:10px;color:#374151;font-size:13px;">
+    ${safeScore && safeScore >= 8.5 ? "평점이 높은 편(8.5점+)이라 안정적인 선택지예요." : "가격/후기 흐름을 같이 보면 실패 확률이 낮아요."}
+  </div>
+</div>
 
 <h3>핵심 요약</h3>
-<p>${pick(oneLineVariants)}</p>
+<p>${randomOne(summaryPool)}</p>
+
+${roomImgBlock ? `<h3>객실 이미지</h3>\n${roomImgBlock}` : ""}
 
 <h3>예약 전 체크리스트</h3>
 <ul style="margin:10px 0 0 18px;">
-  ${uniqueItems.map((t) => `<li style="margin:6px 0;">${t}</li>`).join("")}
+  ${pickChecklist()}
 </ul>
 
-${btn(cta2)}
+${ctaButton("현재 날짜로 가격/객실 확인")}
+
+${poolImgBlock ? `<h3>부대시설/수영장 이미지</h3>\n${poolImgBlock}` : ""}
+
+${foodImgBlock ? `<h3>조식/레스토랑 이미지</h3>\n${foodImgBlock}` : ""}
 
 <h3>자주 묻는 질문(FAQ)</h3>
 <ul style="margin:10px 0 0 18px;">
-  ${selectedFaq.map((x) => `<li style="margin:6px 0;">${x.q}</li>`).join("")}
+  <li style="margin:6px 0;">${hotelName} 체크인/체크아웃 팁이 있나요?</li>
 </ul>
 
-${btn(cta3)}
+${ctaButton("예약 페이지로 이동")}
 
 <h3>해시태그</h3>
-<p>${hashtags}</p>
+<p>#${keyword.split(/\s+/).join(" #")} #숙소추천 #가성비숙소</p>
 
 <script type="application/ld+json">
 ${JSON.stringify(faqJsonLd, null, 2)}
 </script>
   `.trim()
-
-  // ✅ 2000자 미만이면 확장(얇은 글 방지)
-  html = ensureMinLength(html, 2200, { hotelName, keyword, cityName, countryName })
-
-  return html
 }
 
-function ensureMinLength(html: string, minChars: number, ctx: { hotelName: string; keyword: string; cityName?: string; countryName?: string }) {
-  if ((html || "").length >= minChars) return html
-
-  const { hotelName, keyword, cityName, countryName } = ctx
-  const extraBlocks = [
-    `<h3>이 숙소가 잘 맞는 여행 스타일</h3>
-<p>${hotelName}은(는) <b>휴양</b> 중심인지, <b>관광</b> 중심인지에 따라 체감이 달라요. ${
-      cityName ? `${cityName} 일정에서 이동 시간이 길어지지 않는지` : "이동 시간이 무리 없는지"
-    } 먼저 확인해보면 실패 확률이 확 줄어요.</p>`,
-
-    `<h3>가격 비교 팁</h3>
-<p>같은 ${keyword}라도 날짜를 1~2일만 바꿔도 요금 차이가 생길 때가 많아요. 주말/연휴/성수기에는 특히 변동폭이 커서, 가능한 경우 <b>여러 날짜로 비교</b>해보는 게 좋아요.</p>`,
-
-    `<h3>체크인 전 마지막 확인</h3>
-<p>예약 직전에는 “취소 규정”, “포함 사항(조식/세금)”, “침대 구성” 3가지만 다시 확인해도 실수 확률이 크게 줄어요. 필요한 경우 호텔 측 메시지로 요청사항을 남겨두는 것도 도움이 돼요.</p>`,
-
-    `<h3>${countryName ? `${countryName} 여행` : "여행"}에서 자주 놓치는 포인트</h3>
-<p>리조트/호텔은 “좋아 보이는 사진”보다 <b>동선</b>과 <b>실제 이용시간</b>이 만족도를 좌우해요. 공항/역 이동, 주요 스팟 접근성, 밤 이동 안전 등을 함께 고려해보세요.</p>`,
+function buildTitle(keyword: string, hotelName: string, version: Version) {
+  const pool = [
+    `${hotelName} | ${keyword} 예약 전 꼭 볼 정보`,
+    `${keyword} 숙소로 ${hotelName} 어때? 핵심만 정리`,
+    `${hotelName} 후기 요약 | ${keyword} 예약 팁`,
+    `${keyword} 추천: ${hotelName} 체크리스트 정리`,
   ]
-
-  let out = html
-  let i = 0
-  while (out.length < minChars && i < extraBlocks.length * 3) {
-    out += `\n\n${pick(extraBlocks)}`
-    i++
-  }
-  return out
+  if (version === "V1") return pool[0]
+  if (version === "V2") return pool[1]
+  if (version === "V3") return pool[Math.floor(Math.random() * pool.length)]
+  return pool[2]
 }
 
-/**
- * ✅ WP 글 생성 (+ slug + Rank Math meta)
- */
 async function wpCreatePost(params: {
   title: string
   content: string
   status: PublishType
   category: number
   publishAt?: string
-
   slug?: string
   seoTitle?: string
   seoDescription?: string
@@ -498,27 +447,19 @@ async function wpCreatePost(params: {
 
   const auth = base64(`${WP_USERNAME}:${WP_APP_PASSWORD}`)
 
-// 🔥 publish 기본값 draft 강제
-const finalStatus =
-  params.status === "publish" ||
-  params.status === "future"
-    ? params.status
-    : "draft"
+  const finalStatus =
+    params.status === "publish" || params.status === "future" ? params.status : "draft"
 
-const body: any = {
-  title: params.title,
-  content: params.content,
-  status: finalStatus,   // 🔥 여기 변경
-  categories: [Number(params.category)],
-}
+  const body: any = {
+    title: params.title,
+    content: params.content,
+    status: finalStatus,
+    categories: [Number(params.category)],
+  }
 
-  // ✅ slug
   if (params.slug) body.slug = params.slug
 
-  // ✅ excerpt를 seoDescription으로 (없으면 생략)
-  if (params.seoDescription) body.excerpt = params.seoDescription
-
-  // ✅ Rank Math meta (WPCode에서 show_in_rest 열어둔 상태여야 저장됨)
+  // ✅ Rank Math 메타
   body.meta = {
     ...(params.seoTitle ? { rank_math_title: params.seoTitle } : {}),
     ...(params.seoDescription ? { rank_math_description: params.seoDescription } : {}),
@@ -526,7 +467,8 @@ const body: any = {
     ...(params.canonicalUrl ? { rank_math_canonical_url: params.canonicalUrl } : {}),
   }
 
-  // future 발행이면 날짜 필요
+  if (params.seoDescription) body.excerpt = params.seoDescription
+
   if (finalStatus === "future") {
     let publishAt = params.publishAt
     if (!publishAt) {
@@ -555,20 +497,15 @@ const body: any = {
     data = JSON.parse(text)
   } catch {}
 
-  if (!res.ok) {
-    throw new Error(`WP API failed: ${res.status} ${text}`)
-  }
-
+  if (!res.ok) throw new Error(`WP API failed: ${res.status} ${text}`)
   return data
 }
 
 /**
  * ✅ 메인 엔드포인트
- * POST /api/wp/post
  */
 export async function POST(req: Request) {
   try {
-    // 0) x-api-key 체크
     const API_KEY = process.env.API_KEY
     if (!API_KEY) return jsonError(500, "Missing env: API_KEY")
 
@@ -577,77 +514,68 @@ export async function POST(req: Request) {
       return jsonError(401, "Unauthorized: invalid x-api-key")
     }
 
-    // 1) 입력 파싱
     const body = await req.json().catch(() => ({}))
 
-    const keywordRaw = safeStr(body.keyword)
-    const inputHotelId = safeStr(body.hotelId)
-    const hotelUrl = safeStr(body.hotelUrl)
+    const keyword = String(body.keyword || "").trim()
+    const inputHotelId = body.hotelId ? String(body.hotelId).trim() : ""
+    const hotelUrl = body.hotelUrl ? String(body.hotelUrl).trim() : ""
     const version = normalizeVersion(body.version)
     const publishType = normalizePublishType(body.publishType)
     const category = Number(body.category ?? 1)
 
-    const checkInDate = safeStr(body.checkInDate) || undefined
-    const checkOutDate = safeStr(body.checkOutDate) || undefined
+    const checkInDate = body.checkInDate ? String(body.checkInDate).trim() : undefined
+    const checkOutDate = body.checkOutDate ? String(body.checkOutDate).trim() : undefined
 
-    // ✅ SEO/slug 입력
-    const slug = safeStr(body.slug) || undefined
-    const seoTitle = safeStr(body.seoTitle) || undefined
-    const seoDescription = safeStr(body.seoDescription) || undefined
-    const focusKeyword = safeStr(body.focusKeyword) || undefined
-    const canonicalUrl = safeStr(body.canonicalUrl) || undefined
+    const slug = body.slug ? String(body.slug).trim() : undefined
+    const seoTitle = body.seoTitle ? String(body.seoTitle).trim() : undefined
+    const seoDescription = body.seoDescription ? String(body.seoDescription).trim() : undefined
+    const focusKeyword = body.focusKeyword ? String(body.focusKeyword).trim() : undefined
+    const canonicalUrl = body.canonicalUrl ? String(body.canonicalUrl).trim() : undefined
 
+    const providedContent = body.content ? String(body.content) : ""
+
+    const imageUrls: string[] = Array.isArray(body.imageUrls)
+      ? body.imageUrls
+          .map((u: any) => (typeof u === "string" ? u.trim() : ""))
+          .filter(Boolean)
+          .map((u: string) => toHttps(u)!)
+          .filter(Boolean)
+      : []
+
+    if (!keyword) return jsonError(400, "Missing required field: keyword")
     if (!Number.isFinite(category) || category <= 0) return jsonError(400, "Invalid category")
 
-    // 2) Agoda 인증값 확보 (cid/siteId)
-    const { siteId } = getAgodaAuthFromEnv()
-    const cid = process.env.AGODA_CID ? String(process.env.AGODA_CID) : siteId
+    const { cid } = getAgodaAuthFromEnv()
 
-    // 3) hotelId 결정 우선순위: hotelUrl > hotelId > keyword(스크래핑)
-    let hotelId: string | null = null
-
-    const hidFromUrl = extractHotelIdFromUrl(hotelUrl)
-    if (hidFromUrl) hotelId = hidFromUrl
-    if (!hotelId && inputHotelId) hotelId = inputHotelId
-
-    // keyword는 없을 수도 있으니, 나중에 hotelName으로 보정
-    let keyword = keywordRaw
-
+    // hotelId 우선순위: hotelId > hotelUrl(hid) > keyword
+    let hotelId = inputHotelId
+    if (!hotelId && hotelUrl) {
+      const hid = extractHidFromHotelUrl(hotelUrl)
+      if (hid) hotelId = hid
+    }
     if (!hotelId) {
-      if (!keyword) {
-        return jsonError(400, "Missing required field: keyword (or provide hotelUrl/hotelId)")
-      }
       const resolved = await resolveHotelIdFromKeyword(keyword, cid, "ko-kr")
       if (!resolved) {
         return jsonError(
           404,
-          "hotelId 자동 찾기 실패 (keyword로 hid를 찾지 못함). partnersearch에서 hid를 확인하거나 keyword를 더 구체적으로 입력해줘.",
+          "hotelId 자동 찾기 실패. hotelId 또는 hotelUrl(제휴 hid 포함)을 넣어줘.",
           { keyword }
         )
       }
       hotelId = resolved
     }
 
-    // 4) Agoda 상세 조회
     const agodaData = await agodaGetHotelById(hotelId, checkInDate, checkOutDate)
 
     const first = agodaData?.results?.[0]
-    if (!first) {
-      return jsonError(502, "Agoda fetch failed: no results", agodaData)
-    }
+    if (!first) return jsonError(502, "Agoda fetch failed: no results", agodaData)
 
     const hotelName = first.hotelName || first.propertyName || `Hotel ${hotelId}`
-    const imageURL = first.imageURL
+    const imageURL = toHttps(first.imageURL)
     const reviewScore = typeof first.reviewScore === "number" ? first.reviewScore : undefined
+    const cityName = first.cityName || undefined
+    const countryName = first.countryName || undefined
 
-    // (가능하면) 위치 정보 추출
-    const cityName = safeStr(first.cityName) || safeStr(first.city) || undefined
-    const countryName = safeStr(first.countryName) || safeStr(first.country) || undefined
-
-    // keyword 보정(없다면)
-    if (!keyword) keyword = `${hotelName} 예약`
-
-    // 5) 날짜 포함 제휴 링크 생성
     const affiliateUrl = buildAffiliateLink({
       cid,
       hotelId: String(first.hotelId ?? hotelId),
@@ -655,55 +583,45 @@ export async function POST(req: Request) {
       checkOutDate,
       adults: 2,
       rooms: 1,
+      hl: "ko-kr",
     })
 
-    // 6) 제목/본문 생성
     const title = buildTitle(keyword, hotelName, version)
 
-const content =
-  body.content && body.content.length > 1000
-    ? body.content
-    : buildHtml({
-        hotelName,
-        imageURL,
-        reviewScore,
-        affiliateUrl,
-        keyword,
-        cityName,
-        countryName,
-        checkInDate,
-        checkOutDate,
-      })
-    // 7) slug 자동 생성(없을 때만)
-    const autoSlug =
-      slug ||
-      (() => {
-        const base = slugify(`${cityName || ""} ${hotelName} ${keyword}`) || ""
-        if (base.length >= 10) return base.slice(0, 70)
-        return `hotel-${String(first.hotelId ?? hotelId)}`
-      })()
+    const finalImageUrls = imageUrls.length > 0 ? imageUrls : imageURL ? [imageURL] : []
 
-    // 8) Rank Math SEO 자동 값(없을 때만)
-    const autoSeoTitle = seoTitle || title
-    const autoSeoDesc =
-      seoDescription ||
-      clampStr(`${keyword}로 ${hotelName}을(를) 찾는 분들을 위한 핵심 정보(평점·일정·체크리스트)를 정리했습니다. 날짜 포함 링크로 가격/객실을 바로 확인해 보세요.`, 155)
+    const content =
+      providedContent && providedContent.length > 1500
+        ? injectImagesIntoProvidedHtml({
+            html: providedContent,
+            hotelName,
+            keyword,
+            imageUrls: finalImageUrls,
+          })
+        : buildHtml({
+            hotelName,
+            imageURL,
+            imageUrls: finalImageUrls,
+            reviewScore,
+            affiliateUrl,
+            keyword,
+            cityName,
+            countryName,
+            checkInDate,
+            checkOutDate,
+          })
 
-    const autoFocus = focusKeyword || keyword
-
-    // canonicalUrl은 선택(없으면 전달 안 함)
     const wp = await wpCreatePost({
       title,
       content,
       status: publishType,
       category,
       publishAt: body.publishAt ? String(body.publishAt) : undefined,
-
-      slug: autoSlug,
-      seoTitle: autoSeoTitle,
-      seoDescription: autoSeoDesc,
-      focusKeyword: autoFocus,
-      canonicalUrl: canonicalUrl || undefined,
+      slug,
+      seoTitle,
+      seoDescription,
+      focusKeyword,
+      canonicalUrl,
     })
 
     return NextResponse.json({
@@ -713,12 +631,13 @@ const content =
         hotelId: String(hotelId),
         agodaHotelId: String(first.hotelId ?? hotelId),
         affiliateUrl,
-        cityName,
-        countryName,
-        slug: autoSlug,
-        seoTitle: autoSeoTitle,
-        seoDescription: autoSeoDesc,
-        focusKeyword: autoFocus,
+        slug,
+        seoTitle,
+        seoDescription,
+        focusKeyword,
+        canonicalUrl,
+        imageURL,
+        imageUrls: finalImageUrls,
       },
       wp,
     })
