@@ -518,15 +518,7 @@ const affiliateUrl = buildAffiliateLink({
 })
     // 6) HTML + 타이틀
     const title = buildTitle(keyword, hotelName, version)
-const content = buildHtml({
-  hotelName,
-  imageURL,
-  reviewScore,
-  affiliateUrl,
-  keyword,
-  checkInDate,
-  checkOutDate,
-})
+
 const content = buildHtml({
   hotelName,
   imageURL,
