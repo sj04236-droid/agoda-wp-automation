@@ -191,59 +191,197 @@ function buildHtml(params: {
   reviewScore?: number
   affiliateUrl: string
   keyword: string
+  // ✅ (추가) 선택값들 — 없으면 표시 안 됨
+  cityName?: string
+  countryName?: string
+  checkInDate?: string
+  checkOutDate?: string
 }) {
-  const { hotelName, imageURL, reviewScore, affiliateUrl, keyword } = params
+  const {
+    hotelName,
+    imageURL,
+    reviewScore,
+    affiliateUrl,
+    keyword,
+    cityName,
+    countryName,
+    checkInDate,
+    checkOutDate,
+  } = params
 
-  const safeScore = typeof reviewScore === "number" ? reviewScore : null
+  // ---------- 유틸: 랜덤 선택 ----------
+  const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)]
+  const uniqPickN = (arr: string[], n: number) => {
+    const copy = [...arr]
+    const out: string[] = []
+    while (copy.length && out.length < n) {
+      out.push(copy.splice(Math.floor(Math.random() * copy.length), 1)[0])
+    }
+    return out
+  }
 
-  const imgBlock = imageURL
-    ? `<div style="text-align:center;margin:18px 0;">
-         <img src="${imageURL}" alt="${hotelName}"
-              style="max-width:100%;border-radius:12px;" />
-       </div>`
-    : ""
+  // ---------- 평점에 따른 문장 분기 ----------
+  const score = typeof reviewScore === "number" ? reviewScore : null
+  const scoreLabel =
+    score === null ? "평점 정보는 변동될 수 있어요." :
+    score >= 9.0 ? "상위권 만족도(9점대)로 평가가 좋은 편이에요." :
+    score >= 8.5 ? "평점이 높은 편(8.5점+)이라 안정적인 선택지예요." :
+    score >= 8.0 ? "평점 8점대로 무난하게 만족도가 나오는 편이에요." :
+    score >= 7.0 ? "평점이 아주 높진 않지만, 가격/조건에 따라 선택할 만해요." :
+    "평점이 낮은 편이라, 조건을 꼼꼼히 비교하고 예약하는 게 좋아요."
+
+  // ---------- 반복 방지용 문장 풀 ----------
+  const introPool = [
+    `오늘은 “${keyword}” 관점에서 ${hotelName}을(를) 빠르게 정리해볼게요.`,
+    `“${keyword}”로 찾는다면 ${hotelName}이 후보에 들어올 수 있어요. 핵심만 정리했어요.`,
+    `${hotelName}을(를) “${keyword}” 검색 의도로 보는 분들을 위해, 필요한 정보만 추렸어요.`,
+  ]
+
+  const summaryPool = [
+    "한 줄로 보면, 일정과 예산만 맞으면 충분히 만족할 가능성이 높아요.",
+    "결론부터 말하면, 시설/후기 균형이 괜찮아서 1차 후보로 두기 좋아요.",
+    "체크 포인트만 맞으면 ‘실망 확률’을 줄일 수 있는 타입의 숙소예요.",
+    "동선과 컨디션을 중요하게 보면, 꽤 합리적인 선택이 될 수 있어요.",
+  ]
+
+  const checklistPool = [
+    "방 타입(전망/침대 구성)부터 먼저 고르는 게 좋아요.",
+    "조식 포함/불포함 가격 차이를 비교해보세요.",
+    "취소 규정(무료 취소 마감일) 체크는 필수예요.",
+    "공항/역 이동 시간과 교통편을 먼저 확인해두면 편해요.",
+    "성수기에는 가격 변동이 크니, 며칠 단위로 비교해보세요.",
+  ]
+
+  const recommendForPool = [
+    "가족 여행",
+    "커플 휴양",
+    "리조트/수영장 중심",
+    "호캉스",
+    "조용한 휴식",
+    "첫 방문",
+    "가성비 우선",
+  ]
+
+  // FAQ 질문 풀(랜덤 2개 뽑기)
+  const faqQPool = [
+    "가족 여행에 적합한가요?",
+    "커플 여행에도 괜찮나요?",
+    "조식 평가는 어떤 편인가요?",
+    "수영장/부대시설은 어떤가요?",
+    "교통(공항/역 이동)은 편한가요?",
+    "주변에 뭐가 있나요?",
+    "룸 컨디션은 어떤 편인가요?",
+    "체크인/체크아웃 팁이 있나요?",
+  ]
+
+  const chosenFAQ = uniqPickN(faqQPool, 2)
 
   const faqJsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
-    mainEntity: [
-      {
-        "@type": "Question",
-        name: `${hotelName} 위치는 어디인가요?`,
-        acceptedAnswer: { "@type": "Answer", text: "주소 정보는 예약 페이지에서 확인할 수 있어요." },
+    mainEntity: chosenFAQ.map((q) => ({
+      "@type": "Question",
+      name: `${hotelName} ${q}`,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text:
+          q.includes("조식") ? "조식은 시즌/구성에 따라 차이가 있어요. 최신 리뷰와 포함 여부를 확인한 뒤 선택하는 걸 추천해요." :
+          q.includes("수영장") ? "수영장/부대시설은 숙소 강점인 경우가 많아요. 다만 운영시간/휴무는 시즌에 따라 달라질 수 있어요." :
+          q.includes("교통") ? "교통은 일정에 따라 체감이 달라요. 공항/역 기준 이동 시간을 먼저 체크해두면 실패 확률이 줄어요." :
+          q.includes("주변") ? "주변 환경은 여행 스타일에 따라 장단점이 있어요. 목적(휴양/관광)에 맞는지 확인해보세요." :
+          q.includes("룸") ? "룸 컨디션은 객실 타입/동/층에 따라 차이가 날 수 있어요. 최근 사진과 리뷰를 꼭 확인해보세요." :
+          q.includes("체크인") ? "체크인/체크아웃은 호텔 정책에 따라 달라질 수 있어요. 예약 페이지 기준 시간을 확인해 주세요." :
+          "여행 목적(휴양/관광/가족/커플)에 따라 만족도가 달라요. 후기에서 비슷한 목적의 리뷰를 먼저 보는 걸 추천해요.",
       },
-      {
-        "@type": "Question",
-        name: `${hotelName} 평점은 어떤가요?`,
-        acceptedAnswer: {
-          "@type": "Answer",
-          text: safeScore ? `현재 기준 평점은 ${safeScore} 입니다.` : "평점 정보는 예약 페이지에서 확인할 수 있어요.",
-        },
-      },
-    ],
+    })),
   }
 
+  // ---------- 기본 정보 박스(깔끔한 박스 UI) ----------
+  const locationLine =
+    cityName || countryName ? `${cityName ? cityName : ""}${cityName && countryName ? ", " : ""}${countryName ? countryName : ""}` : "예약 페이지에서 확인"
+
+  const dateLine =
+    checkInDate && checkOutDate ? `${checkInDate} ~ ${checkOutDate}` : "원하는 날짜로 변경 가능"
+
+  const scoreLine =
+    score === null ? "예약 페이지에서 확인" : `${score} / 10`
+
+  const recommendTags = uniqPickN(recommendForPool, 3).map((t) => `#${t}`).join(" ")
+
+  // ---------- 버튼(상/중/하 3회) ----------
+  const ctaButton = (label: string) => `
+    <div style="margin:18px 0;text-align:center;">
+      <a href="${affiliateUrl}" target="_blank" rel="nofollow noopener"
+         style="background:#ff5a5f;color:#fff;padding:14px 22px;border-radius:12px;text-decoration:none;font-weight:700;display:inline-block;">
+        👉 ${label}
+      </a>
+    </div>
+  `.trim()
+
+  const imgBlock = imageURL
+    ? `<div style="text-align:center;margin:18px 0;">
+         <img src="${imageURL}" alt="${hotelName}"
+              style="max-width:100%;border-radius:14px;" />
+       </div>`
+    : ""
+
+  // ---------- 본문 구성 ----------
+  const intro = pick(introPool)
+  const summary = pick(summaryPool)
+  const checklist = uniqPickN(checklistPool, 3)
+    .map((t) => `<li style="margin:6px 0;">${t}</li>`)
+    .join("")
+
+  const infoBox = `
+    <div style="border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;background:#f8fafc;margin:18px 0;">
+      <div style="font-weight:800;font-size:16px;margin-bottom:10px;">🏨 호텔 기본 정보</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:14px;line-height:1.5;">
+        <div><b>호텔명</b><br/>${hotelName}</div>
+        <div><b>키워드</b><br/>${keyword}</div>
+        <div><b>위치</b><br/>${locationLine}</div>
+        <div><b>평점</b><br/>${scoreLine}</div>
+        <div><b>추천 일정</b><br/>${dateLine}</div>
+        <div><b>추천 태그</b><br/>${recommendTags}</div>
+      </div>
+      <div style="margin-top:10px;color:#374151;font-size:13px;">
+        ${scoreLabel}
+      </div>
+    </div>
+  `.trim()
+
   return `
-  ${imgBlock}
-  <h2>${keyword} 추천 호텔: ${hotelName}</h2>
-  <p>${hotelName}의 예약 정보를 정리했어요.</p>
+${imgBlock}
 
-  <h3>한 줄 결론</h3>
-  <p>${hotelName}은(는) 후보로 볼 만합니다.</p>
+<h2>${keyword} 추천 호텔: ${hotelName}</h2>
 
-  <div style="margin:28px 0;text-align:center;">
-    <a href="${affiliateUrl}" target="_blank" rel="nofollow noopener"
-       style="background:#ff5a5f;color:#fff;padding:14px 22px;border-radius:10px;text-decoration:none;font-weight:bold;display:inline-block;">
-       👉 아고다 최저가 확인하기
-    </a>
-  </div>
+<p>${intro}</p>
 
-  <script type="application/ld+json">
+${ctaButton("아고다 최저가 확인하기")}
+
+${infoBox}
+
+<h3>핵심 요약</h3>
+<p>${summary}</p>
+
+<h3>예약 전 체크리스트</h3>
+<ul style="margin:10px 0 0 18px;">
+  ${checklist}
+</ul>
+
+${ctaButton("현재 날짜로 가격/객실 확인")}
+
+<h3>자주 묻는 질문(FAQ)</h3>
+<ul style="margin:10px 0 0 18px;">
+  ${chosenFAQ.map((q) => `<li style="margin:6px 0;">${hotelName} ${q}</li>`).join("")}
+</ul>
+
+${ctaButton("예약 페이지로 이동")}
+
+<script type="application/ld+json">
 ${JSON.stringify(faqJsonLd, null, 2)}
-  </script>
+</script>
   `.trim()
 }
-
 function buildTitle(keyword: string, hotelName: string, version: Version) {
   if (version === "V1") return `${hotelName} | ${keyword} 예약 가이드`
   if (version === "V2") return `${keyword} 추천: ${hotelName} 가격/후기 총정리`
@@ -383,13 +521,15 @@ export async function POST(req: Request) {
 
     // 6) HTML + 타이틀
     const title = buildTitle(keyword, hotelName, version)
-    const content = buildHtml({
-      hotelName,
-      imageURL,
-      reviewScore,
-      affiliateUrl,
-      keyword,
-    })
+const content = buildHtml({
+  hotelName,
+  imageURL,
+  reviewScore,
+  affiliateUrl,
+  keyword,
+  checkInDate,
+  checkOutDate,
+})
 
     // 7) WP 발행
     const wp = await wpCreatePost({
