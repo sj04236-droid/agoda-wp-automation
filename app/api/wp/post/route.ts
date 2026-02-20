@@ -216,14 +216,9 @@ function buildHtml(params: {
   countryName?: string
   checkInDate?: string
   checkOutDate?: string
-})
+}){
 
-  // ✅ (추가) 선택값들 — 없으면 표시 안 됨
-  cityName?: string
-  countryName?: string
-  checkInDate?: string
-  checkOutDate?: string
-}) {
+
   const {
     hotelName,
     imageURL,
