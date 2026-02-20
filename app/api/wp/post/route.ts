@@ -179,10 +179,31 @@ async function agodaGetHotelById(hotelId: string, checkInDate?: string, checkOut
   return data
 }
 
-function buildAffiliateLink(cid: string, hotelId: string) {
-  return `https://www.agoda.com/partners/partnersearch.aspx?hid=${encodeURIComponent(
+function buildAffiliateLink(params: {
+  cid: string
+  hotelId: string
+  checkInDate?: string
+  checkOutDate?: string
+  adults?: number
+  rooms?: number
+}) {
+  const { cid, hotelId, checkInDate, checkOutDate } = params
+  const adults = Number(params.adults ?? 2)
+  const rooms = Number(params.rooms ?? 1)
+
+  // 기본 파라미터(호텔 고정)
+  const base = `https://www.agoda.com/partners/partnersearch.aspx?hid=${encodeURIComponent(
     hotelId
   )}&cid=${encodeURIComponent(cid)}`
+
+  // 날짜가 있으면 전환율↑ (클릭 시 바로 날짜 적용)
+  if (checkInDate && checkOutDate) {
+    return `${base}&checkIn=${encodeURIComponent(checkInDate)}&checkOut=${encodeURIComponent(
+      checkOutDate
+    )}&rooms=${rooms}&adults=${adults}`
+  }
+
+  return base
 }
 
 function buildHtml(params: {
@@ -383,71 +404,38 @@ ${JSON.stringify(faqJsonLd, null, 2)}
   `.trim()
 }
 function buildTitle(keyword: string, hotelName: string, version: Version) {
-  if (version === "V1") return `${hotelName} | ${keyword} 예약 가이드`
-  if (version === "V2") return `${keyword} 추천: ${hotelName} 가격/후기 총정리`
-  if (version === "V3") return `${hotelName} 완벽 정리 | ${keyword} 최저가 팁`
-  return `${keyword} 가성비 숙소: ${hotelName} 한눈에 보기`
+  const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)]
+  const cleanHotel = hotelName.replace(/\s+/g, " ").trim()
+
+  const v1 = [
+    `${cleanHotel} | ${keyword} 예약 가이드`,
+    `${keyword} 숙소로 ${cleanHotel} 어때? 핵심만 정리`,
+    `${keyword} 추천: ${cleanHotel} 장단점 빠르게 보기`,
+  ]
+
+  const v2 = [
+    `${keyword} 추천: ${cleanHotel} 가격/후기 요약`,
+    `${cleanHotel} 후기 기반 정리 | ${keyword} 체크포인트`,
+    `${keyword} 숙소 고민 끝: ${cleanHotel} 한눈에`,
+  ]
+
+  const v3 = [
+    `${cleanHotel} 완벽 정리 | ${keyword} 예약 팁`,
+    `${keyword}로 찾은 ${cleanHotel}: 예약 전 체크리스트`,
+    `${cleanHotel} 선택 전 필수 확인 | ${keyword}`,
+  ]
+
+  const v4 = [
+    `${keyword} 가성비 숙소: ${cleanHotel} 한눈에 보기`,
+    `${cleanHotel} 가성비/만족도 분석 | ${keyword}`,
+    `${keyword} 숙소 TOP 후보: ${cleanHotel} 요약`,
+  ]
+
+  if (version === "V1") return pick(v1)
+  if (version === "V2") return pick(v2)
+  if (version === "V3") return pick(v3)
+  return pick(v4)
 }
-
-async function wpCreatePost(params: {
-  title: string
-  content: string
-  status: PublishType
-  category: number
-  publishAt?: string
-}) {
-  const WP_URL = process.env.WP_URL
-  const WP_USERNAME = process.env.WP_USERNAME
-  const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD
-
-  if (!WP_URL) throw new Error("Missing env: WP_URL")
-  if (!WP_USERNAME) throw new Error("Missing env: WP_USERNAME")
-  if (!WP_APP_PASSWORD) throw new Error("Missing env: WP_APP_PASSWORD")
-
-  const auth = base64(`${WP_USERNAME}:${WP_APP_PASSWORD}`)
-
-  const body: any = {
-    title: params.title,
-    content: params.content,
-    status: params.status,
-    categories: [Number(params.category)],
-  }
-
-  if (params.status === "future") {
-    let publishAt = params.publishAt
-    if (!publishAt) {
-      const d = new Date()
-      d.setDate(d.getDate() + 1)
-      d.setHours(9, 0, 0, 0)
-      publishAt = d.toISOString()
-    }
-    body.date = publishAt
-  }
-
-  const endpoint = `${WP_URL.replace(/\/$/, "")}/wp-json/wp/v2/posts`
-
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${auth}`,
-    },
-    body: JSON.stringify(body),
-  })
-
-  const text = await res.text()
-  let data: any = null
-  try {
-    data = JSON.parse(text)
-  } catch {}
-
-  if (!res.ok) {
-    throw new Error(`WP API failed: ${res.status} ${text}`)
-  }
-
-  return data
-}
-
 /**
  * ✅ 메인 엔드포인트
  * POST /api/wp/post
@@ -515,10 +503,18 @@ export async function POST(req: Request) {
     const hotelName = first.hotelName || first.propertyName || `Hotel ${hotelId}`
     const imageURL = first.imageURL
     const reviewScore = typeof first.reviewScore === "number" ? first.reviewScore : undefined
+    const cityName = first.cityName || first.city || first.location || ""
+    const countryName = first.countryName || first.country || ""
 
     // 5) 제휴 링크 생성
-    const affiliateUrl = buildAffiliateLink(siteId, String(first.hotelId ?? hotelId))
-
+const affiliateUrl = buildAffiliateLink({
+  cid: siteId,
+  hotelId: String(first.hotelId ?? hotelId),
+  checkInDate,
+  checkOutDate,
+  adults: 2,
+  rooms: 1,
+})
     // 6) HTML + 타이틀
     const title = buildTitle(keyword, hotelName, version)
 const content = buildHtml({
@@ -529,6 +525,17 @@ const content = buildHtml({
   keyword,
   checkInDate,
   checkOutDate,
+})
+const content = buildHtml({
+  hotelName,
+  imageURL,
+  reviewScore,
+  affiliateUrl,
+  keyword,
+  checkInDate,
+  checkOutDate,
+  cityName,
+  countryName,
 })
 
     // 7) WP 발행
