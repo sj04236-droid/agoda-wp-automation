@@ -13,10 +13,7 @@ type PublishType = "draft" | "publish" | "future"
 type Version = "V1" | "V2" | "V3" | "V4"
 
 function jsonError(status: number, message: string, detail?: any) {
-  return NextResponse.json(
-    { error: message, detail },
-    { status }
-  )
+  return NextResponse.json({ error: message, detail }, { status })
 }
 
 function getDefaultDates() {
@@ -72,10 +69,20 @@ function getAgodaAuthFromEnv() {
 }
 
 /**
- * ✅ (핵심) keyword로 Agoda 웹 검색 페이지를 긁어서 hid(=hotelId) 하나 뽑기
- * - 이유: lt_v1 city search는 cityId가 필요해서, 초보자 UX를 위해 "keyword만"으로 처리하려면
- *   웹 검색 페이지에서 hotelId를 1차로 뽑는 방식이 가장 현실적임.
- *
+ * ✅ (추가) partnersearch 링크에서 hid 뽑기
+ * 예) https://www.agoda.com/partners/partnersearch.aspx?...&hid=625168
+ */
+function extractHidFromPartnerUrl(url: string) {
+  try {
+    const u = new URL(url)
+    const hid = u.searchParams.get("hid")
+    if (hid && /^\d+$/.test(hid)) return hid
+  } catch {}
+  return null
+}
+
+/**
+ * ✅ (기존) keyword로 Agoda 웹 검색 페이지를 긁어서 hid(=hotelId) 하나 뽑기
  * 성공 시: hotelId 숫자 반환
  * 실패 시: null
  */
@@ -122,8 +129,6 @@ async function resolveHotelIdFromKeyword(keyword: string, cid: string, hl = "ko-
 
 /**
  * ✅ Agoda lt_v1: hotelId 기반 조회
- * - additional(최소별점/리뷰/요금필터/정렬/maxResult 등) 넣으면 400 나는 케이스가 많아서 제외
- * - 대신 language/currency/occupancy는 "No result" 방지에 도움되어 포함
  */
 async function agodaGetHotelById(hotelId: string, checkInDate?: string, checkOutDate?: string) {
   const AGODA_URL = "https://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
@@ -153,22 +158,19 @@ async function agodaGetHotelById(hotelId: string, checkInDate?: string, checkOut
     headers: {
       "Content-Type": "application/json",
       "Accept-Encoding": "gzip,deflate",
-      // ✅ Agoda 인증(문서 규격): siteId:apiKey
       Authorization: authHeader,
     },
     body: JSON.stringify(payload),
   })
 
   const text = await res.text()
-console.log("✅ Agoda status =", res.status)
-console.log("✅ Agoda raw =", text)
+  console.log("✅ Agoda status =", res.status)
+  console.log("✅ Agoda raw =", text)
 
   let data: any = null
   try {
     data = JSON.parse(text)
-  } catch {
-    // 그대로 둠
-  }
+  } catch {}
 
   if (!res.ok) {
     throw new Error(`Agoda API failed: ${res.status} ${text}`)
@@ -178,7 +180,9 @@ console.log("✅ Agoda raw =", text)
 }
 
 function buildAffiliateLink(cid: string, hotelId: string) {
-  return `https://www.agoda.com/partners/partnersearch.aspx?hid=${encodeURIComponent(hotelId)}&cid=${encodeURIComponent(cid)}`
+  return `https://www.agoda.com/partners/partnersearch.aspx?hid=${encodeURIComponent(
+    hotelId
+  )}&cid=${encodeURIComponent(cid)}`
 }
 
 function buildHtml(params: {
@@ -241,7 +245,6 @@ ${JSON.stringify(faqJsonLd, null, 2)}
 }
 
 function buildTitle(keyword: string, hotelName: string, version: Version) {
-  // 너무 복잡하게 하지 말고 안정적으로
   if (version === "V1") return `${hotelName} | ${keyword} 예약 가이드`
   if (version === "V2") return `${keyword} 추천: ${hotelName} 가격/후기 총정리`
   if (version === "V3") return `${hotelName} 완벽 정리 | ${keyword} 최저가 팁`
@@ -272,15 +275,12 @@ async function wpCreatePost(params: {
     categories: [Number(params.category)],
   }
 
-  // future 발행이면 날짜 필요
   if (params.status === "future") {
-    // publishAt 없으면 내일 오전 9시로
     let publishAt = params.publishAt
     if (!publishAt) {
       const d = new Date()
       d.setDate(d.getDate() + 1)
       d.setHours(9, 0, 0, 0)
-      // WP는 로컬시간 문자열도 받지만, 여기선 ISO로
       publishAt = d.toISOString()
     }
     body.date = publishAt
@@ -301,9 +301,7 @@ async function wpCreatePost(params: {
   let data: any = null
   try {
     data = JSON.parse(text)
-  } catch {
-    // 그대로
-  }
+  } catch {}
 
   if (!res.ok) {
     throw new Error(`WP API failed: ${res.status} ${text}`)
@@ -332,6 +330,7 @@ export async function POST(req: Request) {
 
     const keyword = String(body.keyword || "").trim()
     const inputHotelId = body.hotelId ? String(body.hotelId).trim() : ""
+    const hotelUrl = body.hotelUrl ? String(body.hotelUrl).trim() : "" // ✅ (추가)
     const version = normalizeVersion(body.version)
     const publishType = normalizePublishType(body.publishType)
     const category = Number(body.category ?? 1)
@@ -345,8 +344,16 @@ export async function POST(req: Request) {
     // 2) Agoda 인증값 확보 (cid/siteId)
     const { siteId } = getAgodaAuthFromEnv()
 
-    // 3) hotelId 자동 찾기 (hotelId가 없으면 keyword로 검색)
+    // 3) hotelId 결정
     let hotelId = inputHotelId
+
+    // ✅ (추가) hotelUrl이 있으면, 여기서 hid를 뽑아서 hotelId로 사용
+    if (!hotelId && hotelUrl) {
+      const extracted = extractHidFromPartnerUrl(hotelUrl)
+      if (extracted) hotelId = extracted
+    }
+
+    // ✅ hotelId가 없으면 마지막으로 keyword 자동찾기(기존 방식)
     if (!hotelId) {
       const resolved = await resolveHotelIdFromKeyword(keyword, siteId, "ko-kr")
       if (!resolved) {
@@ -362,14 +369,9 @@ export async function POST(req: Request) {
     // 4) Agoda 상세 조회
     const agodaData = await agodaGetHotelById(hotelId, checkInDate, checkOutDate)
 
-    // lt_v1 응답에서 첫 결과를 사용
     const first = agodaData?.results?.[0]
     if (!first) {
-      return jsonError(
-        502,
-        "Agoda fetch failed: no results",
-        agodaData
-      )
+      return jsonError(502, "Agoda fetch failed: no results", agodaData)
     }
 
     const hotelName = first.hotelName || first.propertyName || `Hotel ${hotelId}`
@@ -379,7 +381,7 @@ export async function POST(req: Request) {
     // 5) 제휴 링크 생성
     const affiliateUrl = buildAffiliateLink(siteId, String(first.hotelId ?? hotelId))
 
-    // 6) HTML 생성 + 타이틀 생성
+    // 6) HTML + 타이틀
     const title = buildTitle(keyword, hotelName, version)
     const content = buildHtml({
       hotelName,
