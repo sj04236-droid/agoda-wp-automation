@@ -441,6 +441,64 @@ function buildTitle(keyword: string, hotelName: string, version: Version) {
  * ✅ 메인 엔드포인트
  * POST /api/wp/post
  */
+async function wpCreatePost(params: {
+  title: string
+  content: string
+  status: PublishType
+  category: number
+  publishAt?: string
+}) {
+  const WP_URL = process.env.WP_URL
+  const WP_USERNAME = process.env.WP_USERNAME
+  const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD
+
+  if (!WP_URL) throw new Error("Missing env: WP_URL")
+  if (!WP_USERNAME) throw new Error("Missing env: WP_USERNAME")
+  if (!WP_APP_PASSWORD) throw new Error("Missing env: WP_APP_PASSWORD")
+
+  const auth = Buffer.from(`${WP_USERNAME}:${WP_APP_PASSWORD}`).toString("base64")
+
+  const body: any = {
+    title: params.title,
+    content: params.content,
+    status: params.status,
+    categories: [Number(params.category)],
+  }
+
+  if (params.status === "future") {
+    let publishAt = params.publishAt
+    if (!publishAt) {
+      const d = new Date()
+      d.setDate(d.getDate() + 1)
+      d.setHours(9, 0, 0, 0)
+      publishAt = d.toISOString()
+    }
+    body.date = publishAt
+  }
+
+  const endpoint = `${WP_URL.replace(/\/$/, "")}/wp-json/wp/v2/posts`
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Basic ${auth}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  const text = await res.text()
+  let data: any = null
+  try {
+    data = JSON.parse(text)
+  } catch {}
+
+  if (!res.ok) {
+    throw new Error(`WP API failed: ${res.status} ${text}`)
+  }
+
+  return data
+}
 export async function POST(req: Request) {
   try {
     // 0) x-api-key 체크
