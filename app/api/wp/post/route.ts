@@ -447,6 +447,11 @@ async function wpCreatePost(params: {
   status: PublishType
   category: number
   publishAt?: string
+slug?: string
+seoTitle?: string
+seoDescription?: string
+focusKeyword?: string
+canonicalUrl?: string
 }) {
   const WP_URL = process.env.WP_URL
   const WP_USERNAME = process.env.WP_USERNAME
@@ -459,11 +464,21 @@ async function wpCreatePost(params: {
   const auth = Buffer.from(`${WP_USERNAME}:${WP_APP_PASSWORD}`).toString("base64")
 
   const body: any = {
+
     title: params.title,
     content: params.content,
     status: params.status,
     categories: [Number(params.category)],
   }
+// ✅ 슬러그 (body 객체 “밖”)
+if (params.slug) body.slug = params.slug
+// ✅ Rank Math 메타
+body.meta = {
+  ...(params.seoTitle ? { rank_math_title: params.seoTitle } : {}),
+  ...(params.seoDescription ? { rank_math_description: params.seoDescription } : {}),
+  ...(params.focusKeyword ? { rank_math_focus_keyword: params.focusKeyword } : {}),
+  ...(params.canonicalUrl ? { rank_math_canonical_url: params.canonicalUrl } : {}),
+}
 
   if (params.status === "future") {
     let publishAt = params.publishAt
@@ -522,6 +537,26 @@ export async function POST(req: Request) {
 
     const checkInDate = body.checkInDate ? String(body.checkInDate).trim() : undefined
     const checkOutDate = body.checkOutDate ? String(body.checkOutDate).trim() : undefined
+const slug = body.slug ? String(body.slug).trim() : undefined
+const seoTitle = body.seoTitle ? String(body.seoTitle).trim() : undefined
+const seoDescription = body.seoDescription ? String(body.seoDescription).trim() : undefined
+const focusKeyword = body.focusKeyword ? String(body.focusKeyword).trim() : undefined
+const canonicalUrl = body.canonicalUrl ? String(body.canonicalUrl).trim() : undefined
+
+const wp = await wpCreatePost({
+  title,
+  content,
+  status: publishType,
+  category,
+  publishAt: body.publishAt ? String(body.publishAt) : undefined,
+
+  slug,
+  seoTitle,
+  seoDescription,
+  focusKeyword,
+  canonicalUrl,
+})
+
 
     if (!keyword) return jsonError(400, "Missing required field: keyword")
     if (!Number.isFinite(category) || category <= 0) return jsonError(400, "Invalid category")
