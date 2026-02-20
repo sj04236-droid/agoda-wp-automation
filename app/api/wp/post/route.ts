@@ -498,12 +498,19 @@ async function wpCreatePost(params: {
 
   const auth = base64(`${WP_USERNAME}:${WP_APP_PASSWORD}`)
 
-  const body: any = {
-    title: params.title,
-    content: params.content,
-    status: params.status,
-    categories: [Number(params.category)],
-  }
+// 🔥 publish 기본값 draft 강제
+const finalStatus =
+  params.status === "publish" ||
+  params.status === "future"
+    ? params.status
+    : "draft"
+
+const body: any = {
+  title: params.title,
+  content: params.content,
+  status: finalStatus,   // 🔥 여기 변경
+  categories: [Number(params.category)],
+}
 
   // ✅ slug
   if (params.slug) body.slug = params.slug
@@ -520,7 +527,7 @@ async function wpCreatePost(params: {
   }
 
   // future 발행이면 날짜 필요
-  if (params.status === "future") {
+  if (finalStatus === "future") {
     let publishAt = params.publishAt
     if (!publishAt) {
       const d = new Date()
