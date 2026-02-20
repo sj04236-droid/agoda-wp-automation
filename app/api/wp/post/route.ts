@@ -660,18 +660,20 @@ export async function POST(req: Request) {
     // 6) 제목/본문 생성
     const title = buildTitle(keyword, hotelName, version)
 
-    const content = buildHtml({
-      hotelName,
-      imageURL,
-      reviewScore,
-      affiliateUrl,
-      keyword,
-      cityName,
-      countryName,
-      checkInDate,
-      checkOutDate,
-    })
-
+const content =
+  body.content && body.content.length > 1000
+    ? body.content
+    : buildHtml({
+        hotelName,
+        imageURL,
+        reviewScore,
+        affiliateUrl,
+        keyword,
+        cityName,
+        countryName,
+        checkInDate,
+        checkOutDate,
+      })
     // 7) slug 자동 생성(없을 때만)
     const autoSlug =
       slug ||
