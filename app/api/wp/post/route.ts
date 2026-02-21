@@ -195,11 +195,11 @@ function ensureMinLength(html: string, minNoSpace = 2000): string {
   return html + extra
 }
 
-function buildImageBlock(imageUrl: string, alt: string) {
-  const fallback =
-    "https://images.unsplash.com/photo-1501117716987-c8e1ecb2102a?q=80&w=1200&auto=format&fit=crop"
+const FALLBACK_IMAGE =
+  "https://images.unsplash.com/photo-1501117716987-c8e1ecb2102a?q=80&w=1200&auto=format&fit=crop"
 
-  const src = imageUrl && imageUrl.trim().length > 0 ? imageUrl : fallback
+function buildImageBlock(imageUrl: string, alt: string) {
+  const src = imageUrl && imageUrl.trim().length > 0 ? imageUrl : FALLBACK_IMAGE
 
   return `
 <div style="text-align:center;margin:18px 0;">
@@ -216,6 +216,18 @@ function escapeHtml(s: string) {
     .replace(/'/g, "&#039;")
 }
 
+async function validateImage(url?: string): Promise<string | null> {
+  if (!url) return null
+  const u = url.trim()
+  if (!u) return null
+
+  try {
+    const res = await fetch(u, { method: "HEAD" })
+    return res.ok ? u : null
+  } catch {
+    return null
+  }
+}
 function buildFAQSchema(hotelName: string) {
   const safeName = hotelName || "이 호텔"
   const obj = {
@@ -563,8 +575,11 @@ export async function POST(req: Request) {
   const guessedName = cleanHotelNameFromTitle(pageTitle)
   const hotelName = guessedName || `${keyword}`
 
-  // 이미지 우선순위: ogImage → imgList[0]
-  const imageURL = ogImage || imgList[0] || ""
+// 이미지 우선순위: ogImage → imgList[0]  (단, 200 OK만 사용)
+const imageURL =
+  (await validateImage(ogImage)) ||
+  (await validateImage(imgList[0])) ||
+  FALLBACK_IMAGE
 
   const content = buildHtmlByVersion({
     version,
