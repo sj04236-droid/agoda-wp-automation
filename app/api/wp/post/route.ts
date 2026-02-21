@@ -11,7 +11,7 @@ interface RequestBody {
 }
 
 const WP_URL = process.env.WP_URL!
-const WP_USER = process.env.WP_USER!
+const WP_USER = process.env.WP_USERNAME!
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD!
 const API_KEY = process.env.API_KEY!
 
