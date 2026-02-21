@@ -65,11 +65,11 @@ function badRequest(msg: string) {
 }
 
 function getInternalApiKey() {
-  return (
-process.env.API_KEY || process.env.INTERNAL_API_KEY
-    ""
-  )
-}
+return (
+  process.env.API_KEY ||
+  process.env.INTERNAL_API_KEY ||
+  ""
+)
 
 /**
  * ✅ Agoda Affiliate Lookup (lt_v1)
