@@ -195,8 +195,7 @@ function ensureMinLength(html: string, minNoSpace = 2000): string {
   return html + extra
 }
 
-const FALLBACK_IMAGE =
-  "https://images.unsplash.com/photo-1501117716987-c8e1ecb2102a?auto=format&fit=crop&w=1200&q=80"
+const FALLBACK_IMAGE = "https://picsum.photos/1200/800"
 
 function buildImageBlock(imageUrl: string, alt: string) {
   const src = imageUrl && imageUrl.trim().length > 0 ? imageUrl : FALLBACK_IMAGE
@@ -218,26 +217,20 @@ function escapeHtml(s: string) {
 
 async function validateImage(url?: string): Promise<string | null> {
   if (!url) return null
-  const u = url.trim()
-  if (!u) return null
-
-  // ✅ 아고다 default.jpg는 실제로 404가 자주 뜸 → 무조건 버림
-  if (u.includes("/default.jpg")) return null
 
   try {
-    // ✅ HEAD 막히는 곳 많아서 GET + Range로 최소 트래픽 확인
-    const res = await fetch(u, {
+    // 1) HEAD 먼저
+    const head = await fetch(url, { method: "HEAD" })
+    if (head.ok) return url
+  } catch {}
+
+  try {
+    // 2) HEAD 막히면 GET(최소 트래픽)
+    const get = await fetch(url, {
       method: "GET",
       headers: { Range: "bytes=0-0" },
-      redirect: "follow",
     })
-
-    // ✅ 200/206이면 확정 OK
-    if (res.status === 200 || res.status === 206) return u
-
-    // ✅ 403이어도 “이미지는 존재하지만 차단” 케이스가 있음 → 표시용으론 OK 처리(선택)
-    if (res.status === 403) return u
-
+    if (get.ok) return url
     return null
   } catch {
     return null
@@ -329,23 +322,21 @@ function buildHtmlV3(args: {
     checkOutDate,
   } = args
 
-  const hero = buildImageBlock(imageURL || "", `${hotelName} 대표 이미지`)
-  const gallery = (imageUrls || []).slice(0, 4)
-  const galleryHtml =
-    gallery.length > 0
-      ? `
-<h2>📸 실제로 많이 보는 이미지 포인트</h2>
-<p>호텔은 “사진에서 기대한 느낌”이 중요한 편이라, <b>전경/로비</b>, <b>객실</b>, <b>수영장</b>, <b>조식</b> 컷을 최소 3~4장 정도는 보고 결정하는 게 좋아요.</p>
-<div style="display:grid;grid-template-columns:1fr;gap:12px;margin:14px 0;">
-  ${gallery
-    .map(
-      (u, i) =>
-        `<img src="${u}" alt="${escapeHtml(hotelName)} 이미지 ${i + 1}" style="max-width:100%;border-radius:14px;" />`
-    )
-    .join("\n")}
-</div>
-`
-      : ""
+ const validHero = (await validateImage(imageURL)) || FALLBACK_IMAGE
+const hero = buildImageBlock(validHero, `${hotelName} 대표 이미지`)
+const gallery = (imageUrls || []).slice(0, 4)
+
+const validGallery = (
+  await Promise.all(gallery.map((u) => validateImage(u)))
+).filter(Boolean) as string[]
+
+const galleryHtml =
+  validGallery.length > 0
+    ? `
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0;">
+  ${validGallery.map((u, i) => buildImageBlock(u, `${hotelName} 이미지 ${i + 1}`)).join("")}
+</div>`
+    : ""
 
   const dateLine =
     checkInDate && checkOutDate ? `${checkInDate} ~ ${checkOutDate}` : "원하는 날짜로 확인"
