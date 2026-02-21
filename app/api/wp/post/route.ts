@@ -196,12 +196,14 @@ function ensureMinLength(html: string, minNoSpace = 2000): string {
 }
 
 function buildImageBlock(imageUrl: string, alt: string) {
-  if (!imageUrl) return ""
   const fallback =
     "https://images.unsplash.com/photo-1501117716987-c8e1ecb2102a?q=80&w=1200&auto=format&fit=crop"
+
+  const src = imageUrl && imageUrl.trim().length > 0 ? imageUrl : fallback
+
   return `
 <div style="text-align:center;margin:18px 0;">
-  <img src="${imageUrl}" alt="${escapeHtml(alt)}" style="max-width:100%;border-radius:14px;" onerror="this.onerror=null;this.src='${fallback}'" />
+  <img src="${src}" alt="${escapeHtml(alt)}" style="max-width:100%;border-radius:14px;" />
 </div>`
 }
 
