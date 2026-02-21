@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 
 /**
  * ✅ 보안/환경변수
-API_KEY (또는 INTERNAL_API_KEY) : 요청 헤더 x-api-key 검증 
-* - WP_URL : 예) https://hotel.lineuplounge.co.kr 
-* - WP_USERNAME : 워드프레스 계정 (예: java0078) 
-* - WP_APP_PASSWORD : 워드프레스 Application Password (예: "xxxx xxxx xxxx xxxx xxxx xxxx") 
+API_KEY (또는 INTERNAL_API_KEY) : tjsrudtjsskatjswn  요청 헤더 x-api-key 검증 
+* - WP_URL : https://hotel.lineuplounge.co.kr 
+* - WP_USERNAME : java0078
+* - WP_APP_PASSWORD : "WYUe avRT tSyd yjaw 6tfu v4G0"
 * - AGODA_AFFILIATE_CID : 아고다 제휴 CID (예: 1959499) // 없으면 기본값 사용(1959499) */
 
 type Version = "V1" | "V2" | "V3"
@@ -66,8 +66,7 @@ function badRequest(msg: string) {
 
 function getInternalApiKey() {
   return (
-    process.env.INTERNAL_API_KEY ||
-    process.env.API_KEY || // 혹시 예전 키명 호환
+process.env.API_KEY || process.env.INTERNAL_API_KEY
     ""
   )
 }
