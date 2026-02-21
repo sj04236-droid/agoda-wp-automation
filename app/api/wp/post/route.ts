@@ -293,17 +293,30 @@ ${galleryHtml}
 }
 
 export async function POST(req: NextRequest) {
-  // ✅ 내부 API키 체크
-  const headerKey = safeStr(req.headers.get("x-api-key"))
-  const internalKey = getInternalApiKey()
-  if (!internalKey || headerKey !== internalKey) return unauthorized()
-
-  let body: any = {}
   try {
-    body = await req.json()
-  } catch {
-    return badRequest("Invalid JSON body")
+
+    // ✅ 내부 API키 체크
+    const headerKey = safeStr(req.headers.get("x-api-key"))
+    const internalKey = getInternalApiKey()
+    if (!internalKey || headerKey !== internalKey) return unauthorized()
+
+    let body: any = {}
+    try {
+      body = await req.json()
+    } catch {
+      return badRequest("Invalid JSON body")
+    }
+
+    // 🔽 기존 POST 내부 나머지 코드 전부 그대로 여기 둔다
+
+  } catch (e: any) {
+    console.error("API ERROR:", e)
+    return NextResponse.json(
+      { error: e?.message || String(e) },
+      { status: 500 }
+    )
   }
+}
 
   const keyword = safeStr(body.keyword)
   const hotelId = safeStr(body.hotelId)
