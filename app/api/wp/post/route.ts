@@ -303,7 +303,7 @@ ${buildFAQSchema(hotelName)}
 `.trim()
 }
 
-function buildHtmlV3(args: {
+async function buildHtmlV3(params: {
   keyword: string
   hotelName: string
   affiliateUrl: string
@@ -444,7 +444,7 @@ ${buildFAQSchema(hotelName)}
   return ensureMinLength(html, 2000)
 }
 
-function buildHtmlByVersion(params: {
+async function buildHtmlByVersion(params: {
   version: Version
   keyword: string
   hotelName: string
@@ -457,7 +457,7 @@ function buildHtmlByVersion(params: {
   const { version, ...rest } = params
   if (version === "V1") return buildHtmlV1(rest)
   // ✅ V2/V3는 장문(V3)로 통일(원하면 나중에 분리)
-  return buildHtmlV3(rest)
+return await buildHtmlV3(rest)
 }
 
 async function wpCreatePost(params: {
