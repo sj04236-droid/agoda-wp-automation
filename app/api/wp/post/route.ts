@@ -304,13 +304,11 @@ ${buildFAQSchema(hotelName)}
 }
 
 async function buildHtmlV3(params: {
-  keyword: string
   hotelName: string
+  keyword: string
   affiliateUrl: string
   imageURL?: string
   imageUrls?: string[]
-  checkInDate?: string
-  checkOutDate?: string
 }) {
   const {
     keyword,
@@ -323,6 +321,7 @@ async function buildHtmlV3(params: {
   } = args
 
  const validHero = (await validateImage(imageURL)) || FALLBACK_IMAGE
+const validHero = (await validateImage(imageURL)) || FALLBACK_IMAGE
 const hero = buildImageBlock(validHero, `${hotelName} 대표 이미지`)
 const gallery = (imageUrls || []).slice(0, 4)
 
@@ -333,11 +332,18 @@ const validGallery = (
 const galleryHtml =
   validGallery.length > 0
     ? `
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0;">
-  ${validGallery.map((u, i) => buildImageBlock(u, `${hotelName} 이미지 ${i + 1}`)).join("")}
-</div>`
+<h2>📸 실제로 많이 보는 이미지 포인트</h2>
+<p>호텔은 “사진에서 기대한 느낌”이 중요한 편이라, <b>전경/로비</b>, <b>객실</b>, <b>수영장</b>, <b>조식</b> 컷을 최소 3~4장 정도는 보고 결정하는 게 좋아요.</p>
+<div style="display:grid;grid-template-columns:1fr;gap:12px;margin:14px 0;">
+  ${validGallery
+    .map(
+      (u, i) =>
+        `<img src="${u}" alt="${escapeHtml(hotelName)} 이미지 ${i + 1}" style="max-width:100%;border-radius:14px;" />`
+    )
+    .join("\n")}
+</div>
+`
     : ""
-
   const dateLine =
     checkInDate && checkOutDate ? `${checkInDate} ~ ${checkOutDate}` : "원하는 날짜로 확인"
 
@@ -446,17 +452,14 @@ ${buildFAQSchema(hotelName)}
 
 async function buildHtmlByVersion(params: {
   version: Version
-  keyword: string
   hotelName: string
+  keyword: string
   affiliateUrl: string
   imageURL?: string
   imageUrls?: string[]
-  checkInDate?: string
-  checkOutDate?: string
 }) {
   const { version, ...rest } = params
   if (version === "V1") return buildHtmlV1(rest)
-  // ✅ V2/V3는 장문(V3)로 통일(원하면 나중에 분리)
 return await buildHtmlV3(rest)
 }
 
