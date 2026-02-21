@@ -196,7 +196,7 @@ function ensureMinLength(html: string, minNoSpace = 2000): string {
 }
 
 const FALLBACK_IMAGE =
-  "https://images.unsplash.com/photo-1501117716987-c8e1ecb2102a?q=80&w=1200&auto=format&fit=crop"
+  "https://images.unsplash.com/photo-1501117716987-c8e1ecb2102a?auto=format&fit=crop&w=1200&q=80"
 
 function buildImageBlock(imageUrl: string, alt: string) {
   const src = imageUrl && imageUrl.trim().length > 0 ? imageUrl : FALLBACK_IMAGE
@@ -221,9 +221,24 @@ async function validateImage(url?: string): Promise<string | null> {
   const u = url.trim()
   if (!u) return null
 
+  // ✅ 아고다 default.jpg는 실제로 404가 자주 뜸 → 무조건 버림
+  if (u.includes("/default.jpg")) return null
+
   try {
-    const res = await fetch(u, { method: "HEAD" })
-    return res.ok ? u : null
+    // ✅ HEAD 막히는 곳 많아서 GET + Range로 최소 트래픽 확인
+    const res = await fetch(u, {
+      method: "GET",
+      headers: { Range: "bytes=0-0" },
+      redirect: "follow",
+    })
+
+    // ✅ 200/206이면 확정 OK
+    if (res.status === 200 || res.status === 206) return u
+
+    // ✅ 403이어도 “이미지는 존재하지만 차단” 케이스가 있음 → 표시용으론 OK 처리(선택)
+    if (res.status === 403) return u
+
+    return null
   } catch {
     return null
   }
