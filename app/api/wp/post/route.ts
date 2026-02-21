@@ -331,7 +331,6 @@ ${img3 ? `
 </script>
 `
 }
-
 function buildHtmlByVersion(params: {
   version: Version
   hotelName: string
@@ -342,9 +341,11 @@ function buildHtmlByVersion(params: {
   checkInDate?: string
   checkOutDate?: string
 }) {
-  if (params.version === "V3") return buildHtmlV3(params)
-  if (params.version === "V2") return buildHtmlV3({ ...params, version: "V3" }) // ✅ V2는 일단 V3급 장문으로 (원하면 따로 분리 가능)
-  return buildHtmlV1(params)
+  const { version, ...rest } = params
+
+  // V1만 짧게, V2/V3는 장문(V3)으로 통일
+  if (version === "V1") return buildHtmlV1(rest)
+  return buildHtmlV3(rest)
 }
 
 async function wpCreatePost(params: {
