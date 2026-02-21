@@ -343,7 +343,7 @@ export async function POST(req: NextRequest) {
     ? rawGallery.map((x: any) => safeStr(x)).filter(Boolean)
     : []
 
-  const validHero = (await validateImage(rawHero)) || FALLBACK_IMAGE
+const heroImage = (await validateImage(rawHero)) || FALLBACK_IMAGE
 
   const validGallery = (
     await Promise.all(galleryCandidates.slice(0, 4).map((u) => validateImage(u)))
@@ -358,7 +358,7 @@ export async function POST(req: NextRequest) {
   // ✅ HTML 생성 (동기 함수)
   const out = buildHtml({
     hotelName,
-    imageURL: validHero,
+imageURL: heroImage,
     imageUrls: validGallery,
     reviewScore,
     affiliateUrl,
