@@ -1,9 +1,24 @@
 // app/api/search/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 
-const SITE_ID = process.env.AGODA_SITE_ID || '1959499'
-const API_KEY  = process.env.AGODA_API_KEY  || '24680cfc-3bff-4410-845d-5cb97d854532'
-const CID      = process.env.AGODA_AFFILIATE_CID || '1959499'
+// AGODA_AUTH="1959499:api-key" 형식도 지원
+function getAgodaAuth(): { siteId: string; apiKey: string } {
+  const auth = process.env.AGODA_AUTH || ''
+  if (auth.includes(':')) {
+    const parts = auth.split(':')
+    // "1959499:1959499:api-key" 형식 대응 (앞 중복 제거)
+    if (parts.length === 3 && parts[0] === parts[1]) {
+      return { siteId: parts[0], apiKey: parts[2] }
+    }
+    return { siteId: parts[0], apiKey: parts.slice(1).join(':') }
+  }
+  return {
+    siteId: process.env.AGODA_SITE_ID || '1959499',
+    apiKey: process.env.AGODA_API_KEY  || '24680cfc-3bff-4410-845d-5cb97d854532',
+  }
+}
+const { siteId: SITE_ID, apiKey: API_KEY } = getAgodaAuth()
+const CID = process.env.AGODA_AFFILIATE_CID || process.env.AGODA_SITE_ID || '1959499'
 
 // CORS 헤더 — WordPress 등 외부 도메인 허용
 const CORS = {
