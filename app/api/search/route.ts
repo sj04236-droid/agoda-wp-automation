@@ -1,24 +1,63 @@
-// 파일 위치: app/api/search/route.ts
-// GitHub에서 city-ids-worldwide.json 읽어서 전세계 도시 검색
-
+// app/api/search/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 
 const SITE_ID = process.env.AGODA_SITE_ID || '1959499'
 const API_KEY  = process.env.AGODA_API_KEY  || '24680cfc-3bff-4410-845d-5cb97d854532'
 const CID      = process.env.AGODA_AFFILIATE_CID || '1959499'
 
-// GitHub raw URL — city-ids-worldwide.json
-const CITY_JSON_URL = 'https://raw.githubusercontent.com/sj04236-droid/agoda-wp-automation/main/city-ids-worldwide.json'
+// CORS 헤더 — WordPress 등 외부 도메인 허용
+const CORS = {
+  'Access-Control-Allow-Origin':  '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+}
 
-// 메모리 캐시 (서버 재시작 전까지 유지 — API 호출 최소화)
+// OPTIONS preflight 처리
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS })
+}
+
+// 한글 도시명 → 영문 매핑 (JSON에 영문만 있으므로 변환 필요)
+const KR_TO_EN: Record<string, string> = {
+  // 국내
+  '서울':'seoul','부산':'busan','제주':'jeju','강릉':'gangneung-si',
+  '경주':'gyeongju-si','여수':'yeosu-si','인천':'incheon','대구':'daegu',
+  '대전':'daejeon','광주':'gwangju metropolitan city','수원':'suwon-si',
+  '전주':'jeonju-si','속초':'sokcho-si','통영':'tongyeong-si','거제':'geoje-si',
+  '울산':'ulsan','청주':'cheongju-si','평창':'pyeongchang-gun',
+  // 일본
+  '도쿄':'tokyo','동경':'tokyo','오사카':'osaka','후쿠오카':'fukuoka',
+  '교토':'kyoto','삿포로':'sapporo','오키나와':'naha',
+  // 태국
+  '방콕':'bangkok','푸켓':'phuket','치앙마이':'chiang mai','파타야':'pattaya',
+  '코사무이':'koh samui',
+  // 베트남
+  '다낭':'da nang','하노이':'hanoi','호치민':'ho chi minh city',
+  '나트랑':'nha trang','푸꾸옥':'phu quoc',
+  // 발리/인도네시아
+  '발리':'bali','우붓':'ubud','스미냑':'seminyak','짱구':'canggu',
+  // 필리핀
+  '세부':'cebu','보라카이':'boracay','마닐라':'manila','엘니도':'el nido',
+  // 기타 아시아
+  '싱가포르':'singapore','홍콩':'hong kong','타이베이':'taipei',
+  '상하이':'shanghai','마카오':'macau','베이징':'beijing',
+  // 유럽
+  '파리':'paris','런던':'london','로마':'rome','바르셀로나':'barcelona',
+  '프라하':'prague','암스테르담':'amsterdam','빈':'vienna','베를린':'berlin',
+  // 남태평양
+  '괌':'tamuning','사이판':'saipan','하와이':'honolulu','몰디브':'maldives',
+  '시드니':'sydney',
+}
+
+// GitHub에서 city-ids JSON 로드 (1시간 캐시)
+const CITY_JSON_URL = 'https://raw.githubusercontent.com/sj04236-droid/agoda-wp-automation/main/city-ids-worldwide.json'
 let cityCache: Record<string, number> | null = null
 let cacheTime = 0
 
 async function getCityMap(): Promise<Record<string, number>> {
-  // 1시간 캐시
   if (cityCache && Date.now() - cacheTime < 3600000) return cityCache
   try {
-    const res  = await fetch(CITY_JSON_URL, { next: { revalidate: 3600 } })
+    const res = await fetch(CITY_JSON_URL)
     cityCache  = await res.json()
     cacheTime  = Date.now()
     return cityCache!
@@ -27,21 +66,31 @@ async function getCityMap(): Promise<Record<string, number>> {
   }
 }
 
-async function getCityId(query: string): Promise<number | null> {
+async function getCityId(query: string): Promise<{cityId: number, matched: string} | null> {
   const map = await getCityMap()
-  const q   = query.toLowerCase().trim()
 
-  // 1. 완전 일치
-  if (map[q]) return map[q]
+  // 한글 → 영문 변환
+  const q = query.toLowerCase().trim()
+  const enQuery = KR_TO_EN[q] || q
 
-  // 2. 부분 일치 (앞에서부터)
+  // 1. 영문 변환 후 정확 매칭
+  if (map[enQuery]) return { cityId: map[enQuery], matched: enQuery }
+
+  // 2. 원본 정확 매칭
+  if (map[q]) return { cityId: map[q], matched: q }
+
+  // 3. 앞부분 매칭
   for (const [key, val] of Object.entries(map)) {
-    if (key.startsWith(q) || q.startsWith(key)) return val
+    if (key.startsWith(enQuery) || enQuery.startsWith(key)) {
+      return { cityId: val, matched: key }
+    }
   }
 
-  // 3. 포함 검색
+  // 4. 포함 매칭
   for (const [key, val] of Object.entries(map)) {
-    if (key.includes(q) || q.includes(key)) return val
+    if (key.includes(enQuery) || enQuery.includes(key)) {
+      return { cityId: val, matched: key }
+    }
   }
 
   return null
@@ -55,24 +104,25 @@ function getFutureDate(days: number): string {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const query    = searchParams.get('q') || ''
+  const query    = (searchParams.get('q') || '').trim()
   const checkIn  = searchParams.get('checkIn')  || getFutureDate(7)
   const checkOut = searchParams.get('checkOut') || getFutureDate(10)
   const adults   = parseInt(searchParams.get('adults') || '2')
-  const count    = Math.min(parseInt(searchParams.get('count') || '6'), 30)
+  const count    = Math.min(parseInt(searchParams.get('count') || '8'), 30)
 
   if (!query) {
-    return NextResponse.json({ error: 'q 파라미터 필요' }, { status: 400 })
+    return NextResponse.json({ error: 'q 파라미터 필요' }, { status: 400, headers: CORS })
   }
 
-  const cityId = await getCityId(query)
-
-  if (!cityId) {
+  const result = await getCityId(query)
+  if (!result) {
     return NextResponse.json({
-      error:   `"${query}" 도시를 찾을 수 없습니다. 다른 이름으로 검색해보세요.`,
+      error: `"${query}"을(를) 찾을 수 없습니다. 영문으로도 시도해보세요 (예: Seoul, Tokyo)`,
       results: []
-    })
+    }, { headers: CORS })
   }
+
+  const { cityId, matched } = result
 
   try {
     const body = {
@@ -88,10 +138,7 @@ export async function GET(req: NextRequest) {
           discountOnly:       false,
           minimumStarRating:  0,
           minimumReviewScore: 0,
-          occupancy: {
-            numberOfAdult:    adults,
-            numberOfChildren: 0,
-          },
+          occupancy: { numberOfAdult: adults, numberOfChildren: 0 },
         },
       },
     }
@@ -109,7 +156,10 @@ export async function GET(req: NextRequest) {
     const data = await res.json()
 
     if (data.error) {
-      return NextResponse.json({ error: data.error.message, cityId, results: [] })
+      return NextResponse.json(
+        { error: data.error.message || 'API 오류', cityId, matched, results: [] },
+        { headers: CORS }
+      )
     }
 
     const results = (data.results || []).map((h: any) => ({
@@ -126,15 +176,15 @@ export async function GET(req: NextRequest) {
       url:       (h.landingURL || '').replace(/cid=\d+/, `cid=${CID}`),
     }))
 
-    return NextResponse.json({
-      query, cityId, checkIn, checkOut, adults,
-      count: results.length,
-      results,
-    }, {
-      headers: { 'Access-Control-Allow-Origin': '*' }
-    })
+    return NextResponse.json(
+      { query, matched, cityId, checkIn, checkOut, adults, count: results.length, results },
+      { headers: CORS }
+    )
 
   } catch (e: any) {
-    return NextResponse.json({ error: e.message, results: [] }, { status: 500 })
+    return NextResponse.json(
+      { error: e.message, results: [] },
+      { status: 500, headers: CORS }
+    )
   }
 }
